@@ -4,6 +4,8 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
+> 目前修正版：`0.3.1`。修正狀態 listener 在 UI 建立前同步回呼造成的啟動崩潰。
+
 - 「連線」頁位於最左側：BLE 掃描／連線、Wi-Fi Direct group、背景連線、斷線提醒及藍牙／Wi-Fi 狀態。
 - 連線層以序列 GATT 佇列傳送 Wi-Fi Direct SSID、密碼與 station/config；每一個封包都必須收到 characteristic callback 才會前進。
 - 解析 RE 的 Wi-Fi 設定狀態與相機 IPv4，供後續 HTTP、RTSP 使用。
