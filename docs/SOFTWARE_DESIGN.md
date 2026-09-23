@@ -1,0 +1,55 @@
+# 軟體設計文件（SD）
+
+## 系統脈絡
+
+```text
+Android UI → ConnectionCoordinator
+               ├─ BLE transport ─────────────→ HTC RE
+               ├─ Wi-Fi P2P / Network binding → HTC RE
+               └─ HTTP / RTSP ───────────────→ HTC RE
+```
+
+## 邏輯模組
+
+| 模組 | 責任 |
+|---|---|
+| UI | 四個主要頁面、權限說明、錯誤與進度 |
+| ConnectionCoordinator | 跨 BLE/P2P/HTTP 的連線狀態機 |
+| BleTransport | 掃描、GATT 連線、讀寫與通知 |
+| P2pController | group 建立、廣播、group/connection info |
+| NetworkBinder | 取得 P2P `Network` 並綁定 socket |
+| ReApi | HTTP 控制及 JSON 解析 |
+| MediaRepository | 分頁、下載、續傳、驗證與 MediaStore |
+| StreamController | live view 與 RTSP 播放生命週期 |
+| DeviceRepository | 裝置資訊與儲存狀態 |
+
+目前程式是驗證 HTTP 與 Android 平台能力的垂直切片；後續應依上表拆分，避免 Activity 同時負責 UI、狀態及 I/O。
+
+## 連線狀態機
+
+```text
+Idle → PermissionRequired → BleScanning → BleConnecting → BleReady
+     → P2pCreating → CredentialsReady → CameraJoining → IpReady → HttpReady
+```
+
+每個階段均可轉入 `Failed(recoverable, reason)` 或 `Disconnecting → Idle`。UI 顯示具體階段，不使用單一布林值掩蓋部分失敗。
+
+## 執行緒與生命週期
+
+- BLE callback 序列化進單一 command queue，避免同時寫 characteristic。
+- HTTP 與檔案 I/O 使用有限大小 executor。
+- 連線狀態由具生命週期的 service 或 application-scoped coordinator 管理。
+- 使用者中斷時依序取消下載、停止串流、解除 Network callback、移除 P2P group、關閉 GATT。
+
+## 錯誤模型
+
+`PermissionDenied`、`BluetoothUnavailable`、`GattFailure`、`P2pFailure`、`CameraTimeout`、`HttpFailure`、`ProtocolFailure`、`StorageFailure`。
+
+使用者訊息提供可採取的下一步；診斷資料遮蔽密碼與個人媒體內容。
+
+## 安全與擴充
+
+- Cleartext HTTP 只經相機 P2P network 使用。
+- 不由外部 Intent 任意指定下載 URL；檔名正規化且路徑限制於 App／MediaStore。
+- Release build 不記錄敏感 payload。
+- `MediaExportProvider`、`StreamEngine`、`CameraProtocol` 與 `DiagnosticsExporter` 作為後續擴充介面。

@@ -1,0 +1,4 @@
+<resources>
+    <color name="ink">#17201F</color><color name="paper">#F5F5EF</color><color name="signal">#00796B</color>
+    <color name="signal_dark">#005B50</color><color name="line">#C9CECA</color><color name="danger">#B3261E</color>
+</resources>

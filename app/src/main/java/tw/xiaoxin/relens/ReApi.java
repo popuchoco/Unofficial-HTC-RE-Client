@@ -1,0 +1,52 @@
+package tw.xiaoxin.relens;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+
+final class ReApi {
+    interface Progress { void onProgress(long done, long total); }
+    private final String base;
+    ReApi(String host) { base = "http://" + host + ":3000"; }
+    String baseUrl() { return base; }
+    JSONObject cameraInfo() throws Exception { return json("GET", "/v1/camera", null); }
+    JSONObject capture() throws Exception { return json("POST", "/v1/camera/capture", null); }
+    JSONObject startRecording() throws Exception { return json("POST", "/v1/camera/record/start", new JSONObject()); }
+    JSONObject stopRecording() throws Exception { return json("POST", "/v1/camera/record/stop", null); }
+    JSONArray media() throws Exception {
+        JSONObject o = json("GET", "/v1/dcim/items?offset=0&count=200", null);
+        for (String key : new String[]{"items","dcim_items","result"}) if (o.optJSONArray(key) != null) return o.getJSONArray(key);
+        return new JSONArray();
+    }
+    JSONObject storage() throws Exception { return json("GET", "/v1/system/storage/freespace", null); }
+    JSONObject serial() throws Exception { return json("GET", "/v1/system/serial_num", null); }
+    String downloadUrl(String id, String rendition) { return base + "/v1/dcim/items/" + enc(id) + "/" + rendition + "/download"; }
+    void download(String url, File target, Progress progress) throws Exception {
+        long existing = target.exists() ? target.length() : 0;
+        HttpURLConnection c = open(url, "GET");
+        if (existing > 0) c.setRequestProperty("Range", "bytes=" + existing + "-");
+        int status = c.getResponseCode();
+        if (status != 200 && status != 206) throw new IOException("HTTP " + status);
+        if (status == 200) existing = 0;
+        long total = existing + Math.max(0, c.getContentLengthLong());
+        try (InputStream in = c.getInputStream(); RandomAccessFile out = new RandomAccessFile(target, "rw")) {
+            out.seek(existing); byte[] buf = new byte[128 * 1024]; int n; long done = existing;
+            while ((n = in.read(buf)) >= 0) { out.write(buf, 0, n); done += n; progress.onProgress(done, total); }
+        } finally { c.disconnect(); }
+    }
+    private JSONObject json(String method, String path, JSONObject body) throws Exception {
+        HttpURLConnection c = open(base + path, method);
+        if (body != null) { c.setDoOutput(true); c.setRequestProperty("Content-Type", "application/json"); try(OutputStream o=c.getOutputStream()){o.write(body.toString().getBytes(StandardCharsets.UTF_8));} }
+        int code = c.getResponseCode(); InputStream raw = code >= 400 ? c.getErrorStream() : c.getInputStream();
+        String text = raw == null ? "" : read(raw); c.disconnect();
+        if (code < 200 || code >= 300) throw new IOException("HTTP " + code + (text.isEmpty()?"":": "+text));
+        if (text.trim().isEmpty()) return new JSONObject().put("ok", true);
+        try { return new JSONObject(text); } catch (Exception ignored) { return new JSONObject().put("response", text); }
+    }
+    private static HttpURLConnection open(String url, String method) throws Exception { HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection(); c.setRequestMethod(method); c.setConnectTimeout(5000); c.setReadTimeout(15000); c.setRequestProperty("Accept","application/json"); return c; }
+    private static String read(InputStream in) throws Exception { try(BufferedReader r=new BufferedReader(new InputStreamReader(in,StandardCharsets.UTF_8))){StringBuilder b=new StringBuilder(); String s; while((s=r.readLine())!=null)b.append(s); return b.toString();} }
+    private static String enc(String s) { try{return URLEncoder.encode(s,"UTF-8");}catch(Exception e){return s;} }
+}
