@@ -13,6 +13,9 @@ import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
 import android.content.Context;
+import android.content.BroadcastReceiver;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.wifi.WifiManager;
 import android.net.wifi.p2p.WifiP2pGroup;
@@ -68,6 +71,7 @@ final class ReConnectionManager {
     private BluetoothGattCharacteristic gc1PhoneResult;
     private final Gc1LongValueCodec.Collector gc1ResultCollector = new Gc1LongValueCodec.Collector();
     private int controlProfile;
+    private BluetoothGattCharacteristic pendingNotificationCharacteristic;
     private WifiP2pGroup pendingGroup;
     private boolean reGattConnected;
     private boolean notificationsReady;
@@ -86,6 +90,8 @@ final class ReConnectionManager {
 
     private ReConnectionManager(Context context) {
         this.context = context;
+        IntentFilter bondFilter = new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+        context.registerReceiver(bondReceiver, bondFilter);
         commandQueue = new GattCommandQueue(this::writeGattPacket, new GattCommandQueue.Listener() {
             @Override public void onProgress(String label, int remaining) {
                 setP2p(label + "（尚有 " + remaining + " 個封包）");
@@ -176,6 +182,7 @@ final class ReConnectionManager {
         clearGc1Characteristics();
         controlProfile = 0;
         pendingGroup = null;
+        pendingNotificationCharacteristic = null;
         if (gatt != null) {
             try { gatt.disconnect(); gatt.close(); } catch (SecurityException ignored) { }
             gatt = null;
@@ -227,6 +234,7 @@ final class ReConnectionManager {
                 longCommand = null;
                 clearGc1Characteristics();
                 controlProfile = 0;
+                pendingNotificationCharacteristic = null;
                 setBle("連線中斷");
                 AppLog.w("BLE", "GATT disconnected status=" + status + describeGattStatus(status));
                 commandQueue.cancel();
@@ -248,7 +256,7 @@ final class ReConnectionManager {
                 gc1PhoneResult = gc1.getCharacteristic(GC1_PHONE_RESULT);
                 if (!hasRequiredCharacteristics()) { setBle("RE 第一代控制通道不完整"); return; }
                 AppLog.i("BLE", "HTC RE control profile=A000");
-                enableStatusNotifications(current, gc1PhoneResult);
+                ensureBondThenEnableNotifications(current, gc1PhoneResult);
                 return;
             }
             BluetoothGattService gc2 = current.getService(RE_SERVICE);
@@ -273,7 +281,13 @@ final class ReConnectionManager {
         @Override public void onDescriptorWrite(BluetoothGatt current, BluetoothGattDescriptor descriptor, int status) {
             if (!CCCD.equals(descriptor.getUuid())) return;
             notificationsReady = status == BluetoothGatt.GATT_SUCCESS;
-            if (!notificationsReady) { setP2p("無法訂閱 RE 狀態通知"); return; }
+            AppLog.i("BLE", "CCCD write status=" + status + " characteristic="
+                    + descriptor.getCharacteristic().getUuid() + " properties="
+                    + descriptor.getCharacteristic().getProperties());
+            if (!notificationsReady) {
+                setP2p("無法訂閱 RE 狀態通知（status=" + status + "）");
+                return;
+            }
             AppLog.i("BLE", "Wi-Fi status notification ready");
             startWifiBootstrapIfReady();
         }
@@ -287,6 +301,46 @@ final class ReConnectionManager {
         }
     };
 
+    private final BroadcastReceiver bondReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context receiverContext, Intent intent) {
+            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+            if (device == null || gatt == null || !device.equals(gatt.getDevice())) return;
+            int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
+            int previous = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, BluetoothDevice.ERROR);
+            AppLog.i("BLE", "Bond state " + previous + " -> " + state);
+            if (state == BluetoothDevice.BOND_BONDED && pendingNotificationCharacteristic != null) {
+                BluetoothGattCharacteristic characteristic = pendingNotificationCharacteristic;
+                pendingNotificationCharacteristic = null;
+                main.postDelayed(() -> enableStatusNotifications(gatt, characteristic), 400L);
+            } else if (state == BluetoothDevice.BOND_NONE && previous == BluetoothDevice.BOND_BONDING) {
+                pendingNotificationCharacteristic = null;
+                setP2p("HTC RE BLE 配對失敗");
+            }
+        }
+    };
+
+    private void ensureBondThenEnableNotifications(BluetoothGatt current,
+            BluetoothGattCharacteristic characteristic) {
+        BluetoothDevice device = current.getDevice();
+        try {
+            int bondState = device.getBondState();
+            AppLog.i("BLE", "A000 bond state=" + bondState);
+            if (bondState == BluetoothDevice.BOND_BONDED) {
+                enableStatusNotifications(current, characteristic);
+                return;
+            }
+            pendingNotificationCharacteristic = characteristic;
+            setP2p("正在建立 HTC RE BLE 配對");
+            if (bondState == BluetoothDevice.BOND_NONE && !device.createBond()) {
+                pendingNotificationCharacteristic = null;
+                setP2p("無法啟動 HTC RE BLE 配對");
+            }
+        } catch (SecurityException error) {
+            pendingNotificationCharacteristic = null;
+            setP2p("缺少藍牙配對權限");
+        }
+    }
+
     private void enableStatusNotifications(BluetoothGatt current, BluetoothGattCharacteristic notificationCharacteristic) {
         BluetoothGattDescriptor descriptor = notificationCharacteristic.getDescriptor(CCCD);
         if (descriptor == null) { setP2p("找不到 RE 狀態通知描述元"); return; }
@@ -295,7 +349,14 @@ final class ReConnectionManager {
                 setP2p("無法啟用 RE 狀態通知");
                 return;
             }
-            descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            int properties = notificationCharacteristic.getProperties();
+            boolean indicateOnly = (properties & BluetoothGattCharacteristic.PROPERTY_NOTIFY) == 0
+                    && (properties & BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0;
+            descriptor.setValue(indicateOnly ? BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                    : BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            AppLog.i("BLE", "Enabling " + (indicateOnly ? "indication" : "notification")
+                    + " characteristic=" + notificationCharacteristic.getUuid()
+                    + " properties=" + properties + " permissions=" + notificationCharacteristic.getPermissions());
             if (!current.writeDescriptor(descriptor)) setP2p("無法送出狀態通知設定");
         } catch (SecurityException error) {
             setP2p("缺少藍牙連線權限");
