@@ -22,6 +22,8 @@ Android UI → ConnectionCoordinator
 | MediaRepository | 分頁、下載、續傳、驗證與 MediaStore |
 | StreamController | live view 與 RTSP 播放生命週期 |
 | DeviceRepository | 裝置資訊與儲存狀態 |
+| ConnectionMonitorService | 前景服務、背景狀態通知與斷線提醒 |
+| AppLog | 有界記憶體操作紀錄、敏感值遮蔽與 SAF 匯出 |
 
 目前程式是驗證 HTTP 與 Android 平台能力的垂直切片；後續應依上表拆分，避免 Activity 同時負責 UI、狀態及 I/O。
 
@@ -40,6 +42,7 @@ Idle → PermissionRequired → BleScanning → BleConnecting → BleReady
 - HTTP 與檔案 I/O 使用有限大小 executor。
 - 連線狀態由具生命週期的 service 或 application-scoped coordinator 管理。
 - 使用者中斷時依序取消下載、停止串流、解除 Network callback、移除 P2P group、關閉 GATT。
+- 背景連線使用 Android 前景服務與持續通知；此設定不等同開機自動啟動。
 
 ## 錯誤模型
 

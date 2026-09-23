@@ -1,31 +1,18 @@
 package tw.xiaoxin.relens;
 
-import android.Manifest;
-import android.bluetooth.*;
-import android.bluetooth.le.*;
-import android.content.*;
-import android.content.pm.PackageManager;
-import android.net.wifi.p2p.*;
-import android.os.*;
-import java.util.*;
+import android.Manifest;import android.bluetooth.*;import android.bluetooth.le.*;import android.content.*;import android.content.pm.PackageManager;import android.net.wifi.WifiManager;import android.net.wifi.p2p.*;import android.os.*;import java.util.concurrent.CopyOnWriteArrayList;
 
 final class ReConnectionManager {
-    interface Listener { void onStatus(String status); void onFound(String name, String address); }
-    private final Context context; private final Listener listener; private BluetoothLeScanner scanner; private ScanCallback scanCallback;
-    ReConnectionManager(Context c, Listener l){context=c;listener=l;}
-    void scanBle(){
-        BluetoothManager bm=context.getSystemService(BluetoothManager.class);
-        if(bm==null||bm.getAdapter()==null||!bm.getAdapter().isEnabled()){listener.onStatus("請先開啟藍牙");return;}
-        if(Build.VERSION.SDK_INT>=31&&context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN)!=PackageManager.PERMISSION_GRANTED){listener.onStatus("需要附近裝置權限");return;}
-        scanner=bm.getAdapter().getBluetoothLeScanner(); if(scanner==null){listener.onStatus("BLE 掃描器不可用");return;}
-        listener.onStatus("正在尋找 HTC RE…"); scanCallback=new ScanCallback(){@Override public void onScanResult(int t,ScanResult r){BluetoothDevice d=r.getDevice(); String n="HTC RE"; try{if(d.getName()!=null)n=d.getName();}catch(SecurityException ignored){} listener.onFound(n,d.getAddress());}}; scanner.startScan(scanCallback);
-        new Handler(Looper.getMainLooper()).postDelayed(()->{try{if(scanner!=null&&scanCallback!=null)scanner.stopScan(scanCallback);}catch(Exception ignored){}},10000);
-    }
-    void createP2pGroup(){
-        WifiP2pManager m=context.getSystemService(WifiP2pManager.class); if(m==null){listener.onStatus("此手機不支援 Wi‑Fi Direct");return;}
-        WifiP2pManager.Channel ch=m.initialize(context,context.getMainLooper(),()->listener.onStatus("Wi‑Fi Direct 通道中斷"));
-        try{m.createGroup(ch,new WifiP2pManager.ActionListener(){public void onSuccess(){
-            m.requestGroupInfo(ch,group->{int frequency=Build.VERSION.SDK_INT>=29&&group!=null?group.getFrequency():0;listener.onStatus("Wi‑Fi Direct 群組已建立"+(frequency>0?" · "+frequency+" MHz":"")+"，等待 RE 加入");});
-        }public void onFailure(int r){listener.onStatus("建立 P2P 群組失敗（"+r+"）");}});}catch(SecurityException e){listener.onStatus("需要位置權限以建立 Wi‑Fi Direct 群組");}
-    }
+    interface Listener { void onStatus(String status); void onFound(String name,String address); }
+    private static ReConnectionManager instance;
+    static synchronized ReConnectionManager get(Context c){if(instance==null)instance=new ReConnectionManager(c.getApplicationContext());return instance;}
+    private final Context context;private final CopyOnWriteArrayList<Listener> listeners=new CopyOnWriteArrayList<>();private BluetoothLeScanner scanner;private ScanCallback callback;private BluetoothGatt gatt;private String ble="未連線",p2p="未建立",http="未檢查",found;
+    private ReConnectionManager(Context c){context=c;}void addListener(Listener l){listeners.addIfAbsent(l);emit();}void removeListener(Listener l){listeners.remove(l);}String bleState(){return ble;}String p2pState(){return p2p;}String httpState(){return http;}String foundAddress(){return found;}
+    boolean bluetoothOn(){BluetoothManager m=context.getSystemService(BluetoothManager.class);return m!=null&&m.getAdapter()!=null&&m.getAdapter().isEnabled();}boolean wifiOn(){WifiManager m=context.getSystemService(WifiManager.class);return m!=null&&m.isWifiEnabled();}
+    void setHttpState(String s){http=s;AppLog.i("HTTP",s);emit();}
+    void scanBle(){BluetoothManager bm=context.getSystemService(BluetoothManager.class);if(!bluetoothOn()){setBle("藍牙未開啟");return;}if(Build.VERSION.SDK_INT>=31&&context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN)!=PackageManager.PERMISSION_GRANTED){setBle("缺少附近裝置權限");return;}scanner=bm.getAdapter().getBluetoothLeScanner();if(scanner==null){setBle("掃描器不可用");return;}stopScan();setBle("正在搜尋…");callback=new ScanCallback(){@Override public void onScanResult(int t,ScanResult r){BluetoothDevice d=r.getDevice();String n="HTC RE";try{if(d.getName()!=null)n=d.getName();}catch(SecurityException ignored){}found=d.getAddress();setBle("找到 "+n);for(Listener l:listeners)l.onFound(n,found);}};scanner.startScan(callback);new Handler(Looper.getMainLooper()).postDelayed(this::stopScan,10000);}
+    void connectFound(){if(found==null){setBle("請先偵測裝置");return;}if(Build.VERSION.SDK_INT>=31&&context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED){setBle("缺少連線權限");return;}BluetoothManager bm=context.getSystemService(BluetoothManager.class);BluetoothDevice d=bm.getAdapter().getRemoteDevice(found);disconnect(false);setBle("正在連線…");gatt=d.connectGatt(context,false,new BluetoothGattCallback(){@Override public void onConnectionStateChange(BluetoothGatt g,int status,int state){if(state==BluetoothProfile.STATE_CONNECTED){setBle("已連線");AppLog.i("BLE","GATT connected status="+status);try{g.discoverServices();}catch(SecurityException ignored){}}else if(state==BluetoothProfile.STATE_DISCONNECTED){setBle("已斷線");AppLog.w("BLE","GATT disconnected status="+status);ConnectionMonitorService.notifyDisconnect(context);}}@Override public void onServicesDiscovered(BluetoothGatt g,int status){AppLog.i("BLE","Services discovered status="+status+" count="+g.getServices().size());}},BluetoothDevice.TRANSPORT_LE);}
+    void disconnect(){disconnect(true);}private void disconnect(boolean update){stopScan();if(gatt!=null){try{gatt.disconnect();gatt.close();}catch(SecurityException ignored){}gatt=null;}if(update)setBle("未連線");}
+    void createP2pGroup(){if(!wifiOn()){setP2p("Wi‑Fi 未開啟");return;}WifiP2pManager m=context.getSystemService(WifiP2pManager.class);if(m==null){setP2p("不支援 Wi‑Fi Direct");return;}WifiP2pManager.Channel ch=m.initialize(context,context.getMainLooper(),()->setP2p("通道中斷"));setP2p("正在建立…");try{m.createGroup(ch,new WifiP2pManager.ActionListener(){public void onSuccess(){m.requestGroupInfo(ch,g->{int f=Build.VERSION.SDK_INT>=29&&g!=null?g.getFrequency():0;setP2p("已建立"+(f>0?" · "+f+" MHz":""));});}public void onFailure(int r){setP2p("建立失敗（"+r+"）");}});}catch(SecurityException e){setP2p("缺少位置權限");}}
+    private void stopScan(){try{boolean allowed=Build.VERSION.SDK_INT<31||context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN)==PackageManager.PERMISSION_GRANTED;if(allowed&&scanner!=null&&callback!=null)scanner.stopScan(callback);}catch(SecurityException ignored){}callback=null;}private void setBle(String s){ble=s;AppLog.i("BLE",s);emit();}private void setP2p(String s){p2p=s;AppLog.i("P2P",s);emit();}private void emit(){String s="BLE "+ble+" · Wi‑Fi Direct "+p2p;for(Listener l:listeners)l.onStatus(s);}
 }
