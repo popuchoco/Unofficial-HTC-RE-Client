@@ -2,6 +2,8 @@
 
 HTC RE 第一次啟動時，手機先透過 BLE 建立控制通道。手機建立 Wi-Fi Direct group 後，將該 group 的 SSID 與 passphrase 經由 GATT 傳給 RE；RE 再以 station 模式加入 group，成功後由 BLE 通知回報相機 IPv4 位址。後續 HTTP 與 RTSP 都使用這條 IP 網路。
 
+連線層會在 service discovery 後自動辨識兩種控制 profile：第一代硬體使用 `A000` service 與 `A201/A301/A302/A303/A304` characteristics；另一版使用 `5678` service 與 `CF01/CF02` 命令通道。兩者的長資料分段格式不同，不可混用。
+
 ## 必須遵守的寫入順序
 
 1. 建立 BLE GATT 連線並探索 RE 控制服務。

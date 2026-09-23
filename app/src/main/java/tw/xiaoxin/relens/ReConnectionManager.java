@@ -34,6 +34,12 @@ final class ReConnectionManager {
     private static final UUID SHORT_COMMAND = UUID.fromString("0000cf01-0000-1000-8000-00805f9b34fb");
     private static final UUID LONG_COMMAND = UUID.fromString("0000cf02-0000-1000-8000-00805f9b34fb");
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_SERVICE = UUID.fromString("0000a000-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_SERVER_BAND = UUID.fromString("0000a201-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_PHONE_SSID = UUID.fromString("0000a301-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_PHONE_PASSWORD = UUID.fromString("0000a302-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_PHONE_CONFIG = UUID.fromString("0000a303-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_PHONE_RESULT = UUID.fromString("0000a304-0000-1000-8000-00805f9b34fb");
     private static final byte WIFI_CONFIG_REQUEST = 0x21;
     private static final byte WIFI_SET_SSID_REQUEST = 0x22;
     private static final byte WIFI_SET_PASSWORD_REQUEST = 0x23;
@@ -55,6 +61,13 @@ final class ReConnectionManager {
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic shortCommand;
     private BluetoothGattCharacteristic longCommand;
+    private BluetoothGattCharacteristic gc1ServerBand;
+    private BluetoothGattCharacteristic gc1PhoneSsid;
+    private BluetoothGattCharacteristic gc1PhonePassword;
+    private BluetoothGattCharacteristic gc1PhoneConfig;
+    private BluetoothGattCharacteristic gc1PhoneResult;
+    private final Gc1LongValueCodec.Collector gc1ResultCollector = new Gc1LongValueCodec.Collector();
+    private int controlProfile;
     private WifiP2pGroup pendingGroup;
     private boolean reGattConnected;
     private boolean notificationsReady;
@@ -160,6 +173,8 @@ final class ReConnectionManager {
         notificationsReady = false;
         shortCommand = null;
         longCommand = null;
+        clearGc1Characteristics();
+        controlProfile = 0;
         pendingGroup = null;
         if (gatt != null) {
             try { gatt.disconnect(); gatt.close(); } catch (SecurityException ignored) { }
@@ -170,7 +185,7 @@ final class ReConnectionManager {
 
     void createP2pGroup() {
         if (!ReConnectionGate.canStartWifiDirect(reGattConnected,
-                shortCommand != null && longCommand != null, notificationsReady)) {
+                hasRequiredCharacteristics(), notificationsReady)) {
             setP2p("已阻擋：請先完成 HTC RE 的 BLE 控制通道連線");
             AppLog.w("P2P", "Create group blocked: verified RE GATT channel is not ready");
             return;
@@ -210,6 +225,8 @@ final class ReConnectionManager {
                 notificationsReady = false;
                 shortCommand = null;
                 longCommand = null;
+                clearGc1Characteristics();
+                controlProfile = 0;
                 setBle("連線中斷");
                 AppLog.w("BLE", "GATT disconnected status=" + status + describeGattStatus(status));
                 commandQueue.cancel();
@@ -221,12 +238,36 @@ final class ReConnectionManager {
 
         @Override public void onServicesDiscovered(BluetoothGatt current, int status) {
             if (status != BluetoothGatt.GATT_SUCCESS) { setBle("探索服務失敗"); return; }
-            BluetoothGattService service = current.getService(RE_SERVICE);
-            if (service == null) { setBle("找不到 RE 控制服務"); return; }
-            shortCommand = service.getCharacteristic(SHORT_COMMAND);
-            longCommand = service.getCharacteristic(LONG_COMMAND);
-            if (shortCommand == null || longCommand == null) { setBle("RE 控制通道不完整"); return; }
-            enableStatusNotifications(current);
+            BluetoothGattService gc1 = current.getService(GC1_SERVICE);
+            if (gc1 != null) {
+                controlProfile = 1;
+                gc1ServerBand = gc1.getCharacteristic(GC1_SERVER_BAND);
+                gc1PhoneSsid = gc1.getCharacteristic(GC1_PHONE_SSID);
+                gc1PhonePassword = gc1.getCharacteristic(GC1_PHONE_PASSWORD);
+                gc1PhoneConfig = gc1.getCharacteristic(GC1_PHONE_CONFIG);
+                gc1PhoneResult = gc1.getCharacteristic(GC1_PHONE_RESULT);
+                if (!hasRequiredCharacteristics()) { setBle("RE 第一代控制通道不完整"); return; }
+                AppLog.i("BLE", "HTC RE control profile=A000");
+                enableStatusNotifications(current, gc1PhoneResult);
+                return;
+            }
+            BluetoothGattService gc2 = current.getService(RE_SERVICE);
+            if (gc2 != null) {
+                controlProfile = 2;
+                shortCommand = gc2.getCharacteristic(SHORT_COMMAND);
+                longCommand = gc2.getCharacteristic(LONG_COMMAND);
+                if (!hasRequiredCharacteristics()) { setBle("RE 第二代控制通道不完整"); return; }
+                AppLog.i("BLE", "HTC RE control profile=5678");
+                enableStatusNotifications(current, shortCommand);
+                return;
+            }
+            StringBuilder available = new StringBuilder();
+            for (BluetoothGattService service : current.getServices()) {
+                if (available.length() > 0) available.append(',');
+                available.append(service.getUuid().toString(), 4, 8);
+            }
+            AppLog.w("BLE", "No supported RE control service; available=" + available);
+            setBle("找不到支援的 RE 控制服務");
         }
 
         @Override public void onDescriptorWrite(BluetoothGatt current, BluetoothGattDescriptor descriptor, int status) {
@@ -242,15 +283,15 @@ final class ReConnectionManager {
         }
 
         @Override public void onCharacteristicChanged(BluetoothGatt current, BluetoothGattCharacteristic characteristic) {
-            handleStatusNotification(characteristic.getValue());
+            handleStatusNotification(characteristic.getUuid(), characteristic.getValue());
         }
     };
 
-    private void enableStatusNotifications(BluetoothGatt current) {
-        BluetoothGattDescriptor descriptor = shortCommand.getDescriptor(CCCD);
+    private void enableStatusNotifications(BluetoothGatt current, BluetoothGattCharacteristic notificationCharacteristic) {
+        BluetoothGattDescriptor descriptor = notificationCharacteristic.getDescriptor(CCCD);
         if (descriptor == null) { setP2p("找不到 RE 狀態通知描述元"); return; }
         try {
-            if (!current.setCharacteristicNotification(shortCommand, true)) {
+            if (!current.setCharacteristicNotification(notificationCharacteristic, true)) {
                 setP2p("無法啟用 RE 狀態通知");
                 return;
             }
@@ -270,20 +311,31 @@ final class ReConnectionManager {
             return;
         }
         int frequency = Build.VERSION.SDK_INT >= 29 ? pendingGroup.getFrequency() : 0;
-        byte[] config = makeStationConfig(frequency, Locale.getDefault().getCountry());
         List<GattCommandQueue.Packet> writes = new ArrayList<>();
-        writes.addAll(GattCommandQueue.longCommand(LONG_COMMAND, WIFI_SET_SSID_REQUEST,
-                ssid.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi SSID"));
-        writes.addAll(GattCommandQueue.longCommand(LONG_COMMAND, WIFI_SET_PASSWORD_REQUEST,
-                passphrase.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi 密碼"));
-        writes.add(GattCommandQueue.shortCommand(SHORT_COMMAND, WIFI_CONFIG_REQUEST, config,
-                "設定 station 模式並加入群組"));
+        if (controlProfile == 1) {
+            String country = normalizedCountry(Locale.getDefault().getCountry());
+            writes.add(new GattCommandQueue.Packet(GC1_SERVER_BAND,
+                    new byte[]{1, 0, (byte) country.charAt(1), (byte) country.charAt(0)}, "設定 RE 國別與頻段"));
+            addGc1LongPackets(writes, GC1_PHONE_SSID, ssid.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi SSID");
+            addGc1LongPackets(writes, GC1_PHONE_PASSWORD, passphrase.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi 密碼");
+            int transaction = ((int) (System.nanoTime() & 0x0f) << 4) | 1;
+            writes.add(new GattCommandQueue.Packet(GC1_PHONE_CONFIG,
+                    new byte[]{(byte) transaction, 4, 1}, "設定 station 模式並加入群組"));
+        } else {
+            byte[] config = makeStationConfig(frequency, Locale.getDefault().getCountry());
+            writes.addAll(GattCommandQueue.longCommand(LONG_COMMAND, WIFI_SET_SSID_REQUEST,
+                    ssid.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi SSID"));
+            writes.addAll(GattCommandQueue.longCommand(LONG_COMMAND, WIFI_SET_PASSWORD_REQUEST,
+                    passphrase.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi 密碼"));
+            writes.add(GattCommandQueue.shortCommand(SHORT_COMMAND, WIFI_CONFIG_REQUEST, config,
+                    "設定 station 模式並加入群組"));
+        }
         AppLog.i("BLE", "Starting serial Wi-Fi bootstrap; credentials redacted");
         commandQueue.replace(writes);
     }
 
     private byte[] makeStationConfig(int frequency, String country) {
-        String normalizedCountry = country == null || country.length() < 2 ? "TW" : country.toUpperCase(Locale.ROOT);
+        String normalizedCountry = normalizedCountry(country);
         byte[] config = new byte[10];
         config[0] = 1; // station mode
         config[1] = (byte) normalizedCountry.charAt(1);
@@ -304,7 +356,7 @@ final class ReConnectionManager {
 
     private boolean writeGattPacket(UUID characteristicId, byte[] value) {
         BluetoothGatt current = gatt;
-        BluetoothGattCharacteristic characteristic = characteristicId.equals(SHORT_COMMAND) ? shortCommand : longCommand;
+        BluetoothGattCharacteristic characteristic = findWritableCharacteristic(characteristicId);
         if (current == null || characteristic == null || !hasBluetoothPermission(Manifest.permission.BLUETOOTH_CONNECT)) return false;
         try {
             characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
@@ -315,21 +367,70 @@ final class ReConnectionManager {
         }
     }
 
-    private void handleStatusNotification(byte[] value) {
+    private void handleStatusNotification(UUID characteristicId, byte[] value) {
+        if (controlProfile == 1 && GC1_PHONE_RESULT.equals(characteristicId)) {
+            value = gc1ResultCollector.add(value);
+            if (value == null) return;
+            finishWifiConfig(value, 1);
+            return;
+        }
         if (value == null || value.length < 2 || value[0] != WIFI_CONFIG_STATUS_EVENT) return;
+        finishWifiConfig(value, 1);
+    }
+
+    private void finishWifiConfig(byte[] value, int statusIndex) {
+        if (value.length <= statusIndex) return;
         main.removeCallbacks(configTimeout);
         awaitingConfigStatus = false;
-        int status = value[1] & 0xff;
+        int status = value[statusIndex] & 0xff;
         if (status != 0) {
             setP2p("RE 加入群組失敗（status=" + status + "）");
             return;
         }
-        String ip = value.length >= 6
-                ? (value[2] & 0xff) + "." + (value[3] & 0xff) + "." + (value[4] & 0xff) + "." + (value[5] & 0xff)
+        int ipIndex = statusIndex + 1;
+        String ip = value.length >= ipIndex + 4
+                ? (value[ipIndex] & 0xff) + "." + (value[ipIndex + 1] & 0xff) + "." + (value[ipIndex + 2] & 0xff) + "." + (value[ipIndex + 3] & 0xff)
                 : "尚未提供";
         setP2p("RE 已加入 · IP " + ip);
         setHttpState("待連線 · " + ip);
         AppLog.i("BLE", "Wi-Fi bootstrap completed; camera IP=" + ip);
+    }
+
+    private void addGc1LongPackets(List<GattCommandQueue.Packet> writes, UUID characteristic,
+            byte[] payload, String label) {
+        for (byte[] packet : Gc1LongValueCodec.fragment(payload)) {
+            writes.add(new GattCommandQueue.Packet(characteristic, packet, label));
+        }
+    }
+
+    private String normalizedCountry(String country) {
+        return country == null || country.length() < 2 ? "TW" : country.toUpperCase(Locale.ROOT);
+    }
+
+    private boolean hasRequiredCharacteristics() {
+        if (controlProfile == 1) return gc1ServerBand != null && gc1PhoneSsid != null
+                && gc1PhonePassword != null && gc1PhoneConfig != null && gc1PhoneResult != null;
+        if (controlProfile == 2) return shortCommand != null && longCommand != null;
+        return false;
+    }
+
+    private BluetoothGattCharacteristic findWritableCharacteristic(UUID id) {
+        if (SHORT_COMMAND.equals(id)) return shortCommand;
+        if (LONG_COMMAND.equals(id)) return longCommand;
+        if (GC1_SERVER_BAND.equals(id)) return gc1ServerBand;
+        if (GC1_PHONE_SSID.equals(id)) return gc1PhoneSsid;
+        if (GC1_PHONE_PASSWORD.equals(id)) return gc1PhonePassword;
+        if (GC1_PHONE_CONFIG.equals(id)) return gc1PhoneConfig;
+        return null;
+    }
+
+    private void clearGc1Characteristics() {
+        gc1ServerBand = null;
+        gc1PhoneSsid = null;
+        gc1PhonePassword = null;
+        gc1PhoneConfig = null;
+        gc1PhoneResult = null;
+        gc1ResultCollector.reset();
     }
 
     private boolean hasBluetoothPermission(String permission) {
