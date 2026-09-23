@@ -46,6 +46,8 @@ final class ReConnectionManager {
     private static final UUID GC1_PHONE_PASSWORD = UUID.fromString("0000a302-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PHONE_CONFIG = UUID.fromString("0000a303-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PHONE_RESULT = UUID.fromString("0000a304-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_NOTIFY_PRIMARY = UUID.fromString("0000ae01-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_NOTIFY_SECONDARY = UUID.fromString("0000ae02-0000-1000-8000-00805f9b34fb");
     private static final byte WIFI_CONFIG_REQUEST = 0x21;
     private static final byte WIFI_SET_SSID_REQUEST = 0x22;
     private static final byte WIFI_SET_PASSWORD_REQUEST = 0x23;
@@ -74,6 +76,8 @@ final class ReConnectionManager {
     private BluetoothGattCharacteristic gc1PhonePassword;
     private BluetoothGattCharacteristic gc1PhoneConfig;
     private BluetoothGattCharacteristic gc1PhoneResult;
+    private BluetoothGattCharacteristic gc1NotifyPrimary;
+    private BluetoothGattCharacteristic gc1NotifySecondary;
     private final Gc1LongValueCodec.Collector gc1ResultCollector = new Gc1LongValueCodec.Collector();
     private int controlProfile;
     private BluetoothGattCharacteristic pendingNotificationCharacteristic;
@@ -321,6 +325,8 @@ final class ReConnectionManager {
                 gc1PhonePassword = gc1.getCharacteristic(GC1_PHONE_PASSWORD);
                 gc1PhoneConfig = gc1.getCharacteristic(GC1_PHONE_CONFIG);
                 gc1PhoneResult = gc1.getCharacteristic(GC1_PHONE_RESULT);
+                gc1NotifyPrimary = gc1.getCharacteristic(GC1_NOTIFY_PRIMARY);
+                gc1NotifySecondary = gc1.getCharacteristic(GC1_NOTIFY_SECONDARY);
                 if (!hasRequiredCharacteristics()) { setBle("RE 第一代控制通道不完整"); return; }
                 AppLog.i("BLE", "HTC RE control profile=A000");
                 ensureBondThenEnableNotifications(current, gc1PhoneResult);
@@ -347,6 +353,25 @@ final class ReConnectionManager {
 
         @Override public void onDescriptorWrite(BluetoothGatt current, BluetoothGattDescriptor descriptor, int status) {
             if (!CCCD.equals(descriptor.getUuid())) return;
+            UUID source = descriptor.getCharacteristic().getUuid();
+            if (controlProfile == 1 && (GC1_NOTIFY_PRIMARY.equals(source)
+                    || GC1_NOTIFY_SECONDARY.equals(source))) {
+                AppLog.i("BLE", "GC1 multiplex CCCD status=" + status + " characteristic=" + source);
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    setP2p("無法訂閱 RE multiplex 通道（status=" + status + "）");
+                    return;
+                }
+                if (GC1_NOTIFY_PRIMARY.equals(source)) {
+                    writeNotificationDescriptor(current, gc1NotifySecondary, "AE02");
+                    return;
+                }
+                notificationsReady = true;
+                AppLog.i("BLE", "GC1 AE01/AE02 multiplex notifications ready");
+                setP2p("RE 控制通道已就緒");
+                startWifiBootstrapIfReady();
+                startP2pAutomatically();
+                return;
+            }
             notificationsReady = status == BluetoothGatt.GATT_SUCCESS;
             AppLog.i("BLE", "CCCD write status=" + status + " characteristic="
                     + descriptor.getCharacteristic().getUuid() + " properties="
@@ -404,7 +429,21 @@ final class ReConnectionManager {
         }
 
         @Override public void onCharacteristicChanged(BluetoothGatt current, BluetoothGattCharacteristic characteristic) {
-            handleStatusNotification(characteristic.getUuid(), characteristic.getValue());
+            UUID id = characteristic.getUuid();
+            byte[] value = characteristic.getValue();
+            if ((GC1_NOTIFY_PRIMARY.equals(id) || GC1_NOTIFY_SECONDARY.equals(id))
+                    && value != null && value.length > 1) {
+                UUID mapped = gc1EventCharacteristic(value[0]);
+                if (mapped != null) {
+                    byte[] payload = new byte[value.length - 1];
+                    System.arraycopy(value, 1, payload, 0, payload.length);
+                    AppLog.i("BLE", "GC1 multiplex event=" + (value[0] & 0xff)
+                            + " mapped=" + mapped + " length=" + payload.length);
+                    handleStatusNotification(mapped, payload);
+                }
+                return;
+            }
+            handleStatusNotification(id, value);
         }
     };
 
@@ -461,11 +500,8 @@ final class ReConnectionManager {
                 return;
             }
             if (!GattSubscriptionPolicy.requiresDescriptorWrite(controlProfile)) {
-                notificationsReady = true;
                 AppLog.i("BLE", "A000 local notification registration ready; A304 CCCD write skipped");
-                setP2p("RE 控制通道已就緒");
-                startWifiBootstrapIfReady();
-                startP2pAutomatically();
+                writeNotificationDescriptor(current, gc1NotifyPrimary, "AE01");
                 return;
             }
             int properties = notificationCharacteristic.getProperties();
@@ -492,6 +528,48 @@ final class ReConnectionManager {
         } catch (SecurityException error) {
             setP2p("缺少藍牙連線權限");
         }
+    }
+
+    private void writeNotificationDescriptor(BluetoothGatt current,
+            BluetoothGattCharacteristic characteristic, String label) {
+        if (characteristic == null) {
+            setP2p("找不到 RE " + label + " multiplex 通道");
+            return;
+        }
+        BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD);
+        if (descriptor == null) {
+            setP2p("找不到 RE " + label + " CCCD");
+            return;
+        }
+        try {
+            if (!current.setCharacteristicNotification(characteristic, true)) {
+                setP2p("無法啟用 RE " + label + " notification");
+                return;
+            }
+            byte[] value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE;
+            AppLog.i("BLE", "Subscribing GC1 multiplex " + label + " properties="
+                    + characteristic.getProperties());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                int result = current.writeDescriptor(descriptor, value);
+                if (result != android.bluetooth.BluetoothStatusCodes.SUCCESS) {
+                    setP2p("無法送出 RE " + label + " 訂閱（result=" + result + "）");
+                }
+            } else {
+                descriptor.setValue(value);
+                if (!current.writeDescriptor(descriptor)) {
+                    setP2p("無法送出 RE " + label + " 訂閱");
+                }
+            }
+        } catch (SecurityException error) {
+            setP2p("缺少藍牙連線權限");
+        }
+    }
+
+    private UUID gc1EventCharacteristic(byte eventId) {
+        int target = Gc1MultiplexEvent.target(eventId);
+        if (target == Gc1MultiplexEvent.BOOT_READY) return GC1_BOOT_READY;
+        if (target == Gc1MultiplexEvent.PHONE_WIFI_RESULT) return GC1_PHONE_RESULT;
+        return null;
     }
 
     private void rediscoverServices(BluetoothGatt current, String reason) {
@@ -704,7 +782,8 @@ final class ReConnectionManager {
     private boolean hasRequiredCharacteristics() {
         if (controlProfile == 1) return gc1BootReady != null && gc1BootCommand != null
                 && gc1ServerBand != null && gc1PhoneSsid != null
-                && gc1PhonePassword != null && gc1PhoneConfig != null && gc1PhoneResult != null;
+                && gc1PhonePassword != null && gc1PhoneConfig != null && gc1PhoneResult != null
+                && gc1NotifyPrimary != null && gc1NotifySecondary != null;
         if (controlProfile == 2) return shortCommand != null && longCommand != null;
         return false;
     }
@@ -731,6 +810,8 @@ final class ReConnectionManager {
         gc1PhonePassword = null;
         gc1PhoneConfig = null;
         gc1PhoneResult = null;
+        gc1NotifyPrimary = null;
+        gc1NotifySecondary = null;
         gc1ResultCollector.reset();
     }
 
