@@ -1,5 +1,13 @@
 # 架構決策紀錄
 
+## ADR-006：Wi-Fi 引導使用序列 GATT 佇列
+
+所有 characteristic write 維持單一 in-flight，只有收到成功 callback 才送下一個封包。通知訂閱先於 SSID、passphrase 與 station/config，最後等待設定狀態與 RE IPv4。拒絕平行寫入與固定延遲，因兩者無法證明相機已接收前一包。
+
+## ADR-007：YouTube Live 分離控制面與媒體面
+
+串流頁先提供 Google 授權與 YouTube broadcast/stream/bind/transition 控制；RTSP 到 RTMP 的 relay 是獨立後續元件。UI 不會把「已建立 YouTube session」誤示為「已開始傳送影音」。
+
 ## ADR-001：獨立 App
 
 採用獨立套件 `tw.xiaoxin.relens`、獨立 UI 與通訊層，避免與其他 App 的簽章、資料及更新流程衝突。

@@ -1,0 +1,36 @@
+# BLE 與 Wi-Fi Direct 連線引導
+
+HTC RE 第一次啟動時，手機先透過 BLE 建立控制通道。手機建立 Wi-Fi Direct group 後，將該 group 的 SSID 與 passphrase 經由 GATT 傳給 RE；RE 再以 station 模式加入 group，成功後由 BLE 通知回報相機 IPv4 位址。後續 HTTP 與 RTSP 都使用這條 IP 網路。
+
+## 必須遵守的寫入順序
+
+1. 建立 BLE GATT 連線並探索 RE 控制服務。
+2. 訂閱 Wi-Fi 設定狀態 characteristic；收到 CCCD write callback 後才視為通知就緒。
+3. 建立 Wi-Fi Direct group，取得 SSID、passphrase 與頻率。
+4. 寫入 SSID；若超過單包大小則依序分段。
+5. 每一段都等待 `onCharacteristicWrite` 成功，才寫下一段。
+6. 寫入 passphrase，規則同上。
+7. 寫入 station/config 命令，內容含國別、頻段、WPA2、頻道與可選 IP 參數。
+8. 等待 Wi-Fi 設定狀態通知，成功時解析 RE 的 IPv4；60 秒未回報則逾時。
+
+任一時間只允許一個 in-flight GATT write。不得同時寫入多個 characteristic，也不得用固定延遲取代 callback。
+
+## 命令與資料格式
+
+| 用途 | Command ID | Characteristic | 備註 |
+|---|---:|---|---|
+| Wi-Fi config | `0x21` | `CF01` | station mode、國別、頻段、安全性、頻道、選用 IPv4 |
+| SSID | `0x22` | `CF02` | 長命令，可分段 |
+| Passphrase | `0x23` | `CF02` | 長命令，可分段 |
+| Config status | `0x26` | `CF01` notification | 狀態碼與 RE IPv4 |
+
+長命令首包為 command、總長度高位、總長度低位及最多 17 bytes；續包為 command、遞增序號及最多 18 bytes。短命令為 command 後接 payload。
+
+目前 IP 參數預設全為零，代表使用 DHCP；架構保留日後提供靜態 IPv4 的位置。頻率在 API 29 以上使用公開的 `WifiP2pGroup.getFrequency()`，不呼叫舊版隱藏 API。
+
+## 安全與診斷
+
+- Console 僅記錄階段、狀態碼、封包數與結果，不記錄 SSID、passphrase、OAuth token 或 YouTube stream key。
+- 斷線時取消佇列與逾時計時器，不續送殘留封包。
+- callback 回報失敗時立即停止，不猜測裝置已接受資料。
+- 實機驗證需涵蓋 2.4 GHz、5 GHz、長 SSID、不同密碼長度與中途斷線。

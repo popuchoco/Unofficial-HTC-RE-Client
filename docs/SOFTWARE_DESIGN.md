@@ -1,5 +1,17 @@
 # 軟體設計文件（SD）
 
+## 0.3.0 元件增補
+
+| 元件 | 責任 |
+|---|---|
+| `GattCommandQueue` | 保證單一 in-flight GATT write，以 callback 驅動下一個封包，處理長命令分段 |
+| `ReConnectionManager` | 協調 BLE、通知訂閱、Wi-Fi Direct group、station bootstrap 與 RE IP 回報 |
+| `YouTubeAuthManager` | YouTube scope 授權與記憶體 token 生命週期 |
+| `YouTubeLiveClient` | YouTube Live broadcast、stream、bind 與 transition 控制面 |
+| `MediaRelay`（規劃） | RE RTSP／媒體片段至 YouTube RTMP 的媒體面 |
+
+連線狀態機詳見 [CONNECTION_BOOTSTRAP.md](CONNECTION_BOOTSTRAP.md)，直播界線詳見 [YOUTUBE_LIVE.md](YOUTUBE_LIVE.md)。
+
 ## 系統脈絡
 
 ```text
