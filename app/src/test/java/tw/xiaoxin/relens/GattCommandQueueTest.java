@@ -56,4 +56,20 @@ public class GattCommandQueueTest {
         assertEquals(3, packets.get(2).value.length);
         assertEquals(0x04, packets.get(2).value[1]);
     }
+
+    @Test public void failureIdentifiesPacketThatWasRejected() {
+        String[] error = {null};
+        GattCommandQueue queue = new GattCommandQueue((id, value) -> true,
+                new GattCommandQueue.Listener() {
+                    @Override public void onProgress(String label, int remaining) { }
+                    @Override public void onComplete() { }
+                    @Override public void onError(String message) { error[0] = message; }
+                });
+        queue.replace(Arrays.asList(new GattCommandQueue.Packet(
+                CHARACTERISTIC, new byte[]{1, 2, 3, 4}, "country")));
+        queue.onCharacteristicWrite(CHARACTERISTIC, 11);
+        assertTrue(error[0].contains("status=11"));
+        assertTrue(error[0].contains("length=4"));
+        assertTrue(error[0].contains("stage=country"));
+    }
 }

@@ -4,7 +4,7 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前修正版：`0.3.8`。BLE 控制通道就緒後會自動承接既有的手機端 Wi-Fi Direct owner group，沒有可用 group 時才建立新群組；RE 經序列 GATT 寫入加入群組後，App 會把其回報的實際 IPv4 自動套用至 HTTP client。
+> 目前修正版：`0.3.9`。第一代 `A000` profile 會先透過 `A107` 喚醒 RE 控制處理器，再依序寫入 `A201/A301/A302/A303`；Android 13+ 使用不可變 characteristic 寫入 API，並在失敗紀錄中標示 UUID、長度與階段。
 
 - 「連線」頁位於最左側：BLE 掃描／連線、Wi-Fi Direct group、背景連線、斷線提醒及藍牙／Wi-Fi 狀態。
 - 連線層以序列 GATT 佇列傳送 Wi-Fi Direct SSID、密碼與 station/config；每一個封包都必須收到 characteristic callback 才會前進。

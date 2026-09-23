@@ -38,6 +38,7 @@ final class ReConnectionManager {
     private static final UUID LONG_COMMAND = UUID.fromString("0000cf02-0000-1000-8000-00805f9b34fb");
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_SERVICE = UUID.fromString("0000a000-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_BOOT_COMMAND = UUID.fromString("0000a107-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_SERVER_BAND = UUID.fromString("0000a201-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PHONE_SSID = UUID.fromString("0000a301-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PHONE_PASSWORD = UUID.fromString("0000a302-0000-1000-8000-00805f9b34fb");
@@ -64,6 +65,7 @@ final class ReConnectionManager {
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic shortCommand;
     private BluetoothGattCharacteristic longCommand;
+    private BluetoothGattCharacteristic gc1BootCommand;
     private BluetoothGattCharacteristic gc1ServerBand;
     private BluetoothGattCharacteristic gc1PhoneSsid;
     private BluetoothGattCharacteristic gc1PhonePassword;
@@ -291,6 +293,7 @@ final class ReConnectionManager {
             BluetoothGattService gc1 = current.getService(GC1_SERVICE);
             if (gc1 != null) {
                 controlProfile = 1;
+                gc1BootCommand = gc1.getCharacteristic(GC1_BOOT_COMMAND);
                 gc1ServerBand = gc1.getCharacteristic(GC1_SERVER_BAND);
                 gc1PhoneSsid = gc1.getCharacteristic(GC1_PHONE_SSID);
                 gc1PhonePassword = gc1.getCharacteristic(GC1_PHONE_PASSWORD);
@@ -460,6 +463,8 @@ final class ReConnectionManager {
         List<GattCommandQueue.Packet> writes = new ArrayList<>();
         if (controlProfile == 1) {
             String country = normalizedCountry(Locale.getDefault().getCountry());
+            writes.add(new GattCommandQueue.Packet(GC1_BOOT_COMMAND,
+                    new byte[]{1}, "喚醒 RE 控制處理器"));
             writes.add(new GattCommandQueue.Packet(GC1_SERVER_BAND,
                     new byte[]{1, 0, (byte) country.charAt(1), (byte) country.charAt(0)}, "設定 RE 國別與頻段"));
             addGc1LongPackets(writes, GC1_PHONE_SSID, ssid.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi SSID");
@@ -511,6 +516,14 @@ final class ReConnectionManager {
         if (current == null || characteristic == null || !hasBluetoothPermission(Manifest.permission.BLUETOOTH_CONNECT)) return false;
         try {
             characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+            AppLog.i("BLE", "Writing characteristic=" + characteristicId
+                    + " length=" + value.length + " writeType="
+                    + BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                return current.writeCharacteristic(characteristic, value,
+                        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                        == android.bluetooth.BluetoothStatusCodes.SUCCESS;
+            }
             characteristic.setValue(value);
             return current.writeCharacteristic(characteristic);
         } catch (SecurityException error) {
@@ -560,7 +573,7 @@ final class ReConnectionManager {
     }
 
     private boolean hasRequiredCharacteristics() {
-        if (controlProfile == 1) return gc1ServerBand != null && gc1PhoneSsid != null
+        if (controlProfile == 1) return gc1BootCommand != null && gc1ServerBand != null && gc1PhoneSsid != null
                 && gc1PhonePassword != null && gc1PhoneConfig != null && gc1PhoneResult != null;
         if (controlProfile == 2) return shortCommand != null && longCommand != null;
         return false;
@@ -569,6 +582,7 @@ final class ReConnectionManager {
     private BluetoothGattCharacteristic findWritableCharacteristic(UUID id) {
         if (SHORT_COMMAND.equals(id)) return shortCommand;
         if (LONG_COMMAND.equals(id)) return longCommand;
+        if (GC1_BOOT_COMMAND.equals(id)) return gc1BootCommand;
         if (GC1_SERVER_BAND.equals(id)) return gc1ServerBand;
         if (GC1_PHONE_SSID.equals(id)) return gc1PhoneSsid;
         if (GC1_PHONE_PASSWORD.equals(id)) return gc1PhonePassword;
@@ -577,6 +591,7 @@ final class ReConnectionManager {
     }
 
     private void clearGc1Characteristics() {
+        gc1BootCommand = null;
         gc1ServerBand = null;
         gc1PhoneSsid = null;
         gc1PhonePassword = null;

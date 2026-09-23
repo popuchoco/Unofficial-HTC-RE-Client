@@ -53,7 +53,9 @@ final class GattCommandQueue {
     synchronized void onCharacteristicWrite(UUID characteristic, int status) {
         if (inFlight == null || !inFlight.characteristic.equals(characteristic)) return;
         if (status != BluetoothGatt.GATT_SUCCESS) {
-            fail("GATT 寫入失敗（status=" + status + "）");
+            fail("GATT 寫入失敗（status=" + status + "，characteristic="
+                    + inFlight.characteristic + "，length=" + inFlight.value.length
+                    + "，stage=" + inFlight.label + "）");
             return;
         }
         inFlight = null;
