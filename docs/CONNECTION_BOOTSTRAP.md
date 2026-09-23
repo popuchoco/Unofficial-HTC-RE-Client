@@ -7,13 +7,13 @@ HTC RE 第一次啟動時，手機先透過 BLE 建立控制通道。手機建�
 ## 必須遵守的寫入順序
 
 1. 建立 BLE GATT 連線並探索 RE 控制服務。
-2. 訂閱 Wi-Fi 設定狀態 characteristic；收到 CCCD write callback 後才視為通知就緒。
-3. 建立 Wi-Fi Direct group，取得 SSID、passphrase 與頻率。
+2. 註冊 Wi-Fi 設定狀態 characteristic；第一代 `A000/A304` 使用本機 notification 註冊，其他 profile 收到 CCCD write callback 後才視為通知就緒。
+3. 優先承接手機既有的 Wi-Fi Direct owner group；沒有可用 group 時建立新群組，取得 SSID、passphrase 與頻率。
 4. 寫入 SSID；若超過單包大小則依序分段。
 5. 每一段都等待 `onCharacteristicWrite` 成功，才寫下一段。
 6. 寫入 passphrase，規則同上。
 7. 寫入 station/config 命令，內容含國別、頻段、WPA2、頻道與可選 IP 參數。
-8. 等待 Wi-Fi 設定狀態通知，成功時解析 RE 的 IPv4；60 秒未回報則逾時。
+8. 等待 Wi-Fi 設定狀態通知，成功時解析 RE 的 IPv4 並自動更新 HTTP client；60 秒未回報則逾時。
 
 任一時間只允許一個 in-flight GATT write。不得同時寫入多個 characteristic，也不得用固定延遲取代 callback。
 

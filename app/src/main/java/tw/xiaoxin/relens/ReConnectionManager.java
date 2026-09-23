@@ -73,10 +73,13 @@ final class ReConnectionManager {
     private int controlProfile;
     private BluetoothGattCharacteristic pendingNotificationCharacteristic;
     private WifiP2pGroup pendingGroup;
+    private WifiP2pManager.Channel p2pChannel;
     private boolean reGattConnected;
     private boolean notificationsReady;
     private boolean awaitingConfigStatus;
+    private boolean p2pStartRequested;
     private int notificationSubscriptionAttempts;
+    private String cameraIp;
     private String ble = "未連線";
     private String p2p = "未建立";
     private String http = "未連線";
@@ -117,6 +120,7 @@ final class ReConnectionManager {
     String p2pState() { return p2p; }
     String httpState() { return http; }
     String foundAddress() { return foundAddress; }
+    String cameraIp() { return cameraIp; }
 
     boolean bluetoothOn() {
         BluetoothManager manager = context.getSystemService(BluetoothManager.class);
@@ -183,6 +187,8 @@ final class ReConnectionManager {
         clearGc1Characteristics();
         controlProfile = 0;
         pendingGroup = null;
+        p2pStartRequested = false;
+        cameraIp = null;
         pendingNotificationCharacteristic = null;
         notificationSubscriptionAttempts = 0;
         if (gatt != null) {
@@ -202,24 +208,57 @@ final class ReConnectionManager {
         if (!wifiOn()) { setP2p("Wi-Fi 未開啟"); return; }
         WifiP2pManager manager = context.getSystemService(WifiP2pManager.class);
         if (manager == null) { setP2p("不支援 Wi-Fi Direct"); return; }
-        WifiP2pManager.Channel channel = manager.initialize(context, context.getMainLooper(), () -> setP2p("P2P channel 中斷"));
-        setP2p("正在建立群組");
+        if (p2pChannel == null) {
+            p2pChannel = manager.initialize(context, context.getMainLooper(), () -> {
+                p2pChannel = null;
+                p2pStartRequested = false;
+                setP2p("P2P channel 中斷");
+            });
+        }
+        p2pStartRequested = true;
+        setP2p("正在檢查 Wi-Fi Direct 群組");
+        try {
+            manager.requestGroupInfo(p2pChannel, group -> {
+                if (group != null && P2pBootstrapPolicy.canReuseOwnerGroup(group.isGroupOwner(),
+                        group.getNetworkName(), group.getPassphrase())) {
+                    AppLog.i("P2P", "Reusing existing owner group");
+                    onP2pGroupReady(group);
+                    return;
+                }
+                createNewP2pGroup(manager, p2pChannel);
+            });
+        } catch (SecurityException error) {
+            p2pStartRequested = false;
+            setP2p("缺少 Wi-Fi 權限");
+        }
+    }
+
+    private void createNewP2pGroup(WifiP2pManager manager, WifiP2pManager.Channel channel) {
+        setP2p("正在建立 Wi-Fi Direct 群組");
         try {
             manager.createGroup(channel, new WifiP2pManager.ActionListener() {
                 @Override public void onSuccess() {
                     manager.requestGroupInfo(channel, group -> {
                         if (group == null) { setP2p("無法讀取群組資訊"); return; }
-                        pendingGroup = group;
-                        int frequency = Build.VERSION.SDK_INT >= 29 ? group.getFrequency() : 0;
-                        setP2p("群組已建立" + (frequency > 0 ? " · " + frequency + " MHz" : ""));
-                        startWifiBootstrapIfReady();
+                        onP2pGroupReady(group);
                     });
                 }
-                @Override public void onFailure(int reason) { setP2p("建立失敗（" + reason + "）"); }
+                @Override public void onFailure(int reason) {
+                    p2pStartRequested = false;
+                    setP2p("建立失敗（" + reason + "）");
+                }
             });
         } catch (SecurityException error) {
+            p2pStartRequested = false;
             setP2p("缺少 Wi-Fi 權限");
         }
+    }
+
+    private void onP2pGroupReady(WifiP2pGroup group) {
+        pendingGroup = group;
+        int frequency = Build.VERSION.SDK_INT >= 29 ? group.getFrequency() : 0;
+        setP2p("群組已建立" + (frequency > 0 ? " · " + frequency + " MHz" : ""));
+        startWifiBootstrapIfReady();
     }
 
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
@@ -299,6 +338,7 @@ final class ReConnectionManager {
             }
             AppLog.i("BLE", "Wi-Fi status notification ready");
             startWifiBootstrapIfReady();
+            startP2pAutomatically();
         }
 
         @Override public void onCharacteristicWrite(BluetoothGatt current, BluetoothGattCharacteristic characteristic, int status) {
@@ -363,6 +403,7 @@ final class ReConnectionManager {
                 AppLog.i("BLE", "A000 local notification registration ready; A304 CCCD write skipped");
                 setP2p("RE 控制通道已就緒");
                 startWifiBootstrapIfReady();
+                startP2pAutomatically();
                 return;
             }
             int properties = notificationCharacteristic.getProperties();
@@ -439,6 +480,11 @@ final class ReConnectionManager {
         commandQueue.replace(writes);
     }
 
+    private void startP2pAutomatically() {
+        if (!P2pBootstrapPolicy.shouldAutoStart(p2pStartRequested, pendingGroup != null)) return;
+        main.post(this::createP2pGroup);
+    }
+
     private byte[] makeStationConfig(int frequency, String country) {
         String normalizedCountry = normalizedCountry(country);
         byte[] config = new byte[10];
@@ -496,6 +542,7 @@ final class ReConnectionManager {
         String ip = value.length >= ipIndex + 4
                 ? (value[ipIndex] & 0xff) + "." + (value[ipIndex + 1] & 0xff) + "." + (value[ipIndex + 2] & 0xff) + "." + (value[ipIndex + 3] & 0xff)
                 : "尚未提供";
+        if (!"尚未提供".equals(ip) && !"0.0.0.0".equals(ip)) cameraIp = ip;
         setP2p("RE 已加入 · IP " + ip);
         setHttpState("待連線 · " + ip);
         AppLog.i("BLE", "Wi-Fi bootstrap completed; camera IP=" + ip);
