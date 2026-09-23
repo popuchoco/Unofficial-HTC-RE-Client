@@ -76,6 +76,7 @@ final class ReConnectionManager {
     private boolean reGattConnected;
     private boolean notificationsReady;
     private boolean awaitingConfigStatus;
+    private int notificationSubscriptionAttempts;
     private String ble = "未連線";
     private String p2p = "未建立";
     private String http = "未連線";
@@ -183,6 +184,7 @@ final class ReConnectionManager {
         controlProfile = 0;
         pendingGroup = null;
         pendingNotificationCharacteristic = null;
+        notificationSubscriptionAttempts = 0;
         if (gatt != null) {
             try { gatt.disconnect(); gatt.close(); } catch (SecurityException ignored) { }
             gatt = null;
@@ -235,6 +237,7 @@ final class ReConnectionManager {
                 clearGc1Characteristics();
                 controlProfile = 0;
                 pendingNotificationCharacteristic = null;
+                notificationSubscriptionAttempts = 0;
                 setBle("連線中斷");
                 AppLog.w("BLE", "GATT disconnected status=" + status + describeGattStatus(status));
                 commandQueue.cancel();
@@ -285,6 +288,12 @@ final class ReConnectionManager {
                     + descriptor.getCharacteristic().getUuid() + " properties="
                     + descriptor.getCharacteristic().getProperties());
             if (!notificationsReady) {
+                if (GattSubscriptionPolicy.shouldRediscover(status, notificationSubscriptionAttempts)) {
+                    setP2p("控制通道屬性已失效，正在重新探索服務…");
+                    AppLog.w("BLE", "CCCD rejected with GATT_NOT_LONG; rediscovering services once");
+                    main.postDelayed(() -> rediscoverServices(current, "CCCD status=11"), 300L);
+                    return;
+                }
                 setP2p("無法訂閱 RE 狀態通知（status=" + status + "）");
                 return;
             }
@@ -309,9 +318,9 @@ final class ReConnectionManager {
             int previous = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, BluetoothDevice.ERROR);
             AppLog.i("BLE", "Bond state " + previous + " -> " + state);
             if (state == BluetoothDevice.BOND_BONDED && pendingNotificationCharacteristic != null) {
-                BluetoothGattCharacteristic characteristic = pendingNotificationCharacteristic;
                 pendingNotificationCharacteristic = null;
-                main.postDelayed(() -> enableStatusNotifications(gatt, characteristic), 400L);
+                setP2p("BLE 配對完成，正在重新探索 RE 控制服務…");
+                main.postDelayed(() -> rediscoverServices(gatt, "bond completed"), 400L);
             } else if (state == BluetoothDevice.BOND_NONE && previous == BluetoothDevice.BOND_BONDING) {
                 pendingNotificationCharacteristic = null;
                 setP2p("HTC RE BLE 配對失敗");
@@ -352,12 +361,40 @@ final class ReConnectionManager {
             int properties = notificationCharacteristic.getProperties();
             boolean indicateOnly = (properties & BluetoothGattCharacteristic.PROPERTY_NOTIFY) == 0
                     && (properties & BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0;
-            descriptor.setValue(indicateOnly ? BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
-                    : BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            byte[] cccdValue = indicateOnly ? BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                    : BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE;
+            notificationSubscriptionAttempts++;
             AppLog.i("BLE", "Enabling " + (indicateOnly ? "indication" : "notification")
                     + " characteristic=" + notificationCharacteristic.getUuid()
-                    + " properties=" + properties + " permissions=" + notificationCharacteristic.getPermissions());
-            if (!current.writeDescriptor(descriptor)) setP2p("無法送出狀態通知設定");
+                    + " properties=" + properties + " permissions=" + notificationCharacteristic.getPermissions()
+                    + " descriptorPermissions=" + descriptor.getPermissions()
+                    + " valueLength=" + cccdValue.length
+                    + " attempt=" + notificationSubscriptionAttempts);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                int result = current.writeDescriptor(descriptor, cccdValue);
+                if (result != android.bluetooth.BluetoothStatusCodes.SUCCESS) {
+                    setP2p("無法送出狀態通知設定（result=" + result + "）");
+                }
+            } else {
+                descriptor.setValue(cccdValue);
+                if (!current.writeDescriptor(descriptor)) setP2p("無法送出狀態通知設定");
+            }
+        } catch (SecurityException error) {
+            setP2p("缺少藍牙連線權限");
+        }
+    }
+
+    private void rediscoverServices(BluetoothGatt current, String reason) {
+        if (current == null || current != gatt || !reGattConnected) return;
+        clearGc1Characteristics();
+        shortCommand = null;
+        longCommand = null;
+        controlProfile = 0;
+        notificationsReady = false;
+        try {
+            boolean started = current.discoverServices();
+            AppLog.i("BLE", "Service rediscovery reason=" + reason + " started=" + started);
+            if (!started) setP2p("無法重新探索 RE 控制服務");
         } catch (SecurityException error) {
             setP2p("缺少藍牙連線權限");
         }
