@@ -8,8 +8,8 @@ android {
         minSdk 26
         // Android 12 Bluetooth permissions without target 33's Wi-Fi permission path.
         targetSdk 32
-        versionCode 12
-        versionName '0.3.9'
+        versionCode 14
+        versionName '0.4.1'
     }
     buildTypes {
         release { minifyEnabled false; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro' }

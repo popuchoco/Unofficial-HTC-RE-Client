@@ -24,6 +24,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -38,6 +39,7 @@ final class ReConnectionManager {
     private static final UUID LONG_COMMAND = UUID.fromString("0000cf02-0000-1000-8000-00805f9b34fb");
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_SERVICE = UUID.fromString("0000a000-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_BOOT_READY = UUID.fromString("0000a101-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_BOOT_COMMAND = UUID.fromString("0000a107-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_SERVER_BAND = UUID.fromString("0000a201-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PHONE_SSID = UUID.fromString("0000a301-0000-1000-8000-00805f9b34fb");
@@ -65,6 +67,7 @@ final class ReConnectionManager {
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic shortCommand;
     private BluetoothGattCharacteristic longCommand;
+    private BluetoothGattCharacteristic gc1BootReady;
     private BluetoothGattCharacteristic gc1BootCommand;
     private BluetoothGattCharacteristic gc1ServerBand;
     private BluetoothGattCharacteristic gc1PhoneSsid;
@@ -80,6 +83,11 @@ final class ReConnectionManager {
     private boolean notificationsReady;
     private boolean awaitingConfigStatus;
     private boolean p2pStartRequested;
+    private boolean bootReadInFlight;
+    private boolean bootWakeInFlight;
+    private boolean bootPreparationComplete;
+    private boolean freshGattForBond;
+    private boolean gattReplacementInProgress;
     private int notificationSubscriptionAttempts;
     private String cameraIp;
     private String ble = "未連線";
@@ -191,6 +199,11 @@ final class ReConnectionManager {
         pendingGroup = null;
         p2pStartRequested = false;
         cameraIp = null;
+        bootReadInFlight = false;
+        bootWakeInFlight = false;
+        bootPreparationComplete = false;
+        freshGattForBond = false;
+        gattReplacementInProgress = false;
         pendingNotificationCharacteristic = null;
         notificationSubscriptionAttempts = 0;
         if (gatt != null) {
@@ -265,6 +278,14 @@ final class ReConnectionManager {
 
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt current, int status, int newState) {
+            if (current != gatt) {
+                AppLog.i("BLE", "Ignoring callback from replaced GATT status=" + status
+                        + " state=" + newState);
+                if (newState == BluetoothProfile.STATE_DISCONNECTED && !gattReplacementInProgress) {
+                    try { current.close(); } catch (SecurityException ignored) { }
+                }
+                return;
+            }
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 reGattConnected = true;
                 setBle("已連線");
@@ -293,6 +314,7 @@ final class ReConnectionManager {
             BluetoothGattService gc1 = current.getService(GC1_SERVICE);
             if (gc1 != null) {
                 controlProfile = 1;
+                gc1BootReady = gc1.getCharacteristic(GC1_BOOT_READY);
                 gc1BootCommand = gc1.getCharacteristic(GC1_BOOT_COMMAND);
                 gc1ServerBand = gc1.getCharacteristic(GC1_SERVER_BAND);
                 gc1PhoneSsid = gc1.getCharacteristic(GC1_PHONE_SSID);
@@ -345,7 +367,40 @@ final class ReConnectionManager {
         }
 
         @Override public void onCharacteristicWrite(BluetoothGatt current, BluetoothGattCharacteristic characteristic, int status) {
+            if (bootWakeInFlight && GC1_BOOT_COMMAND.equals(characteristic.getUuid())) {
+                bootWakeInFlight = false;
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    setP2p("喚醒 RE 失敗（status=" + status + "）");
+                    AppLog.w("BLE", "Boot wake write failed status=" + status);
+                    return;
+                }
+                bootPreparationComplete = true;
+                AppLog.i("BLE", "RE wake command accepted; waiting before Wi-Fi bootstrap");
+                main.postDelayed(ReConnectionManager.this::startWifiBootstrapIfReady, 1500L);
+                return;
+            }
             commandQueue.onCharacteristicWrite(characteristic.getUuid(), status);
+        }
+
+        @Override public void onCharacteristicRead(BluetoothGatt current,
+                BluetoothGattCharacteristic characteristic, int status) {
+            if (!GC1_BOOT_READY.equals(characteristic.getUuid())) return;
+            bootReadInFlight = false;
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                setP2p("無法讀取 RE 啟動狀態（status=" + status + "）");
+                AppLog.w("BLE", "Boot-ready read failed status=" + status);
+                return;
+            }
+            byte[] value = characteristic.getValue();
+            boolean ready = Gc1BootState.isReady(value);
+            AppLog.i("BLE", "A101 boot-ready=" + ready + " length="
+                    + (value == null ? 0 : value.length));
+            if (ready) {
+                bootPreparationComplete = true;
+                main.postDelayed(ReConnectionManager.this::startWifiBootstrapIfReady, 1500L);
+                return;
+            }
+            writeGc1WakeCommand(current);
         }
 
         @Override public void onCharacteristicChanged(BluetoothGatt current, BluetoothGattCharacteristic characteristic) {
@@ -362,8 +417,8 @@ final class ReConnectionManager {
             AppLog.i("BLE", "Bond state " + previous + " -> " + state);
             if (state == BluetoothDevice.BOND_BONDED && pendingNotificationCharacteristic != null) {
                 pendingNotificationCharacteristic = null;
-                setP2p("BLE 配對完成，正在重新探索 RE 控制服務…");
-                main.postDelayed(() -> rediscoverServices(gatt, "bond completed"), 400L);
+                setP2p("BLE 配對完成，正在重建安全 GATT 連線…");
+                reconnectWithFreshGatt(device, "bond completed");
             } else if (state == BluetoothDevice.BOND_NONE && previous == BluetoothDevice.BOND_BONDING) {
                 pendingNotificationCharacteristic = null;
                 setP2p("HTC RE BLE 配對失敗");
@@ -378,6 +433,10 @@ final class ReConnectionManager {
             int bondState = device.getBondState();
             AppLog.i("BLE", "A000 bond state=" + bondState);
             if (bondState == BluetoothDevice.BOND_BONDED) {
+                if (!freshGattForBond) {
+                    reconnectWithFreshGatt(device, "existing bond");
+                    return;
+                }
                 enableStatusNotifications(current, characteristic);
                 return;
             }
@@ -451,8 +510,53 @@ final class ReConnectionManager {
         }
     }
 
+    private void reconnectWithFreshGatt(BluetoothDevice device, String reason) {
+        if (gattReplacementInProgress || device == null) return;
+        BluetoothGatt oldGatt = gatt;
+        if (oldGatt == null) return;
+        gattReplacementInProgress = true;
+        gatt = null;
+        reGattConnected = false;
+        notificationsReady = false;
+        commandQueue.cancel();
+        clearGc1Characteristics();
+        controlProfile = 0;
+        AppLog.i("BLE", "Replacing GATT after " + reason);
+        try { oldGatt.disconnect(); } catch (SecurityException ignored) { }
+        main.postDelayed(() -> {
+            boolean refreshed = refreshGattCache(oldGatt);
+            try { oldGatt.close(); } catch (SecurityException ignored) { }
+            AppLog.i("BLE", "GATT cache refresh result=" + refreshed);
+            try {
+                freshGattForBond = true;
+                gattReplacementInProgress = false;
+                setBle("正在重建安全連線");
+                gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE);
+            } catch (SecurityException error) {
+                freshGattForBond = false;
+                gattReplacementInProgress = false;
+                setBle("缺少藍牙連線權限");
+            }
+        }, 700L);
+    }
+
+    private boolean refreshGattCache(BluetoothGatt target) {
+        try {
+            Method refresh = target.getClass().getMethod("refresh");
+            Object result = refresh.invoke(target);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Exception error) {
+            AppLog.w("BLE", "GATT cache refresh unavailable: " + error.getClass().getSimpleName());
+            return false;
+        }
+    }
+
     private void startWifiBootstrapIfReady() {
         if (pendingGroup == null || !notificationsReady || commandQueue.isBusy() || awaitingConfigStatus) return;
+        if (controlProfile == 1 && !bootPreparationComplete) {
+            readGc1BootState();
+            return;
+        }
         String ssid = pendingGroup.getNetworkName();
         String passphrase = pendingGroup.getPassphrase();
         if (ssid == null || ssid.isEmpty() || passphrase == null || passphrase.isEmpty()) {
@@ -463,8 +567,6 @@ final class ReConnectionManager {
         List<GattCommandQueue.Packet> writes = new ArrayList<>();
         if (controlProfile == 1) {
             String country = normalizedCountry(Locale.getDefault().getCountry());
-            writes.add(new GattCommandQueue.Packet(GC1_BOOT_COMMAND,
-                    new byte[]{1}, "喚醒 RE 控制處理器"));
             writes.add(new GattCommandQueue.Packet(GC1_SERVER_BAND,
                     new byte[]{1, 0, (byte) country.charAt(1), (byte) country.charAt(0)}, "設定 RE 國別與頻段"));
             addGc1LongPackets(writes, GC1_PHONE_SSID, ssid.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi SSID");
@@ -483,6 +585,33 @@ final class ReConnectionManager {
         }
         AppLog.i("BLE", "Starting serial Wi-Fi bootstrap; credentials redacted");
         commandQueue.replace(writes);
+    }
+
+    private void readGc1BootState() {
+        BluetoothGatt current = gatt;
+        if (bootReadInFlight || bootWakeInFlight || current == null || gc1BootReady == null) return;
+        try {
+            bootReadInFlight = true;
+            setP2p("正在讀取 RE 啟動狀態");
+            AppLog.i("BLE", "Reading A101 boot-ready properties=" + gc1BootReady.getProperties());
+            if (!current.readCharacteristic(gc1BootReady)) {
+                bootReadInFlight = false;
+                setP2p("Android 未接受 RE 啟動狀態讀取");
+            }
+        } catch (SecurityException error) {
+            bootReadInFlight = false;
+            setP2p("缺少藍牙連線權限");
+        }
+    }
+
+    private void writeGc1WakeCommand(BluetoothGatt current) {
+        if (bootWakeInFlight || gc1BootCommand == null) return;
+        bootWakeInFlight = true;
+        setP2p("RE 處於待機，正在喚醒");
+        if (!writeGattPacket(GC1_BOOT_COMMAND, new byte[]{1})) {
+            bootWakeInFlight = false;
+            setP2p("Android 未接受 RE 喚醒命令");
+        }
     }
 
     private void startP2pAutomatically() {
@@ -573,7 +702,8 @@ final class ReConnectionManager {
     }
 
     private boolean hasRequiredCharacteristics() {
-        if (controlProfile == 1) return gc1BootCommand != null && gc1ServerBand != null && gc1PhoneSsid != null
+        if (controlProfile == 1) return gc1BootReady != null && gc1BootCommand != null
+                && gc1ServerBand != null && gc1PhoneSsid != null
                 && gc1PhonePassword != null && gc1PhoneConfig != null && gc1PhoneResult != null;
         if (controlProfile == 2) return shortCommand != null && longCommand != null;
         return false;
@@ -591,6 +721,10 @@ final class ReConnectionManager {
     }
 
     private void clearGc1Characteristics() {
+        bootReadInFlight = false;
+        bootWakeInFlight = false;
+        bootPreparationComplete = false;
+        gc1BootReady = null;
         gc1BootCommand = null;
         gc1ServerBand = null;
         gc1PhoneSsid = null;
