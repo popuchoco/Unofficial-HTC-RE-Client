@@ -15,6 +15,8 @@ HTC RE 第一次啟動時，手機先透過 BLE 建立控制通道。手機建�
 
 任一時間只允許一個 in-flight GATT write。不得同時寫入多個 characteristic，也不得用固定延遲取代 callback。
 
+Wi-Fi Direct group 建立前另有硬性前置條件：BLE 必須仍為 connected、RE 的短／長命令 characteristic 均已找到，而且狀態通知 CCCD 寫入成功。一般 BLE 周邊、無名廣播、尚未完成 service discovery 的裝置或已斷線的舊狀態，都不能進入 P2P 階段。
+
 ## 命令與資料格式
 
 | 用途 | Command ID | Characteristic | 備註 |

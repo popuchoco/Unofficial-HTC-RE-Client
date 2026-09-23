@@ -56,6 +56,7 @@ final class ReConnectionManager {
     private BluetoothGattCharacteristic shortCommand;
     private BluetoothGattCharacteristic longCommand;
     private WifiP2pGroup pendingGroup;
+    private boolean reGattConnected;
     private boolean notificationsReady;
     private boolean awaitingConfigStatus;
     private String ble = "未連線";
@@ -155,6 +156,7 @@ final class ReConnectionManager {
         main.removeCallbacks(configTimeout);
         commandQueue.cancel();
         awaitingConfigStatus = false;
+        reGattConnected = false;
         notificationsReady = false;
         shortCommand = null;
         longCommand = null;
@@ -167,6 +169,12 @@ final class ReConnectionManager {
     }
 
     void createP2pGroup() {
+        if (!ReConnectionGate.canStartWifiDirect(reGattConnected,
+                shortCommand != null && longCommand != null, notificationsReady)) {
+            setP2p("已阻擋：請先完成 HTC RE 的 BLE 控制通道連線");
+            AppLog.w("P2P", "Create group blocked: verified RE GATT channel is not ready");
+            return;
+        }
         if (!wifiOn()) { setP2p("Wi-Fi 未開啟"); return; }
         WifiP2pManager manager = context.getSystemService(WifiP2pManager.class);
         if (manager == null) { setP2p("不支援 Wi-Fi Direct"); return; }
@@ -193,10 +201,15 @@ final class ReConnectionManager {
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt current, int status, int newState) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                reGattConnected = true;
                 setBle("已連線");
                 AppLog.i("BLE", "GATT connected status=" + status);
                 try { current.discoverServices(); } catch (SecurityException ignored) { }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                reGattConnected = false;
+                notificationsReady = false;
+                shortCommand = null;
+                longCommand = null;
                 setBle("連線中斷");
                 AppLog.w("BLE", "GATT disconnected status=" + status + describeGattStatus(status));
                 commandQueue.cancel();
