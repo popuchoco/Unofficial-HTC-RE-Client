@@ -116,15 +116,20 @@ final class ReConnectionManager {
         scanner = manager.getAdapter().getBluetoothLeScanner();
         if (scanner == null) { setBle("無法取得掃描器"); return; }
         stopScan();
+        foundAddress = null;
         setBle("正在掃描");
         scanCallback = new ScanCallback() {
             @Override public void onScanResult(int callbackType, ScanResult result) {
                 BluetoothDevice device = result.getDevice();
-                String name = "HTC RE";
-                try { if (device.getName() != null) name = device.getName(); } catch (SecurityException ignored) { }
+                String name = null;
+                try { name = device.getName(); } catch (SecurityException ignored) { }
+                byte[] record = result.getScanRecord() == null ? null : result.getScanRecord().getBytes();
+                if (!ReAdvertisementMatcher.matches(name, record)) return;
+                if (name == null || name.isEmpty()) name = "HTC RE";
                 foundAddress = device.getAddress();
                 setBle("找到 " + name);
                 for (Listener listener : listeners) listener.onFound(name, foundAddress);
+                stopScan();
             }
         };
         try { scanner.startScan(scanCallback); }
@@ -193,7 +198,7 @@ final class ReConnectionManager {
                 try { current.discoverServices(); } catch (SecurityException ignored) { }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 setBle("連線中斷");
-                AppLog.w("BLE", "GATT disconnected status=" + status);
+                AppLog.w("BLE", "GATT disconnected status=" + status + describeGattStatus(status));
                 commandQueue.cancel();
                 main.removeCallbacks(configTimeout);
                 awaitingConfigStatus = false;
@@ -316,6 +321,12 @@ final class ReConnectionManager {
 
     private boolean hasBluetoothPermission(String permission) {
         return Build.VERSION.SDK_INT < 31 || context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private String describeGattStatus(int status) {
+        if (status == 147) return " (connection timeout / target unavailable)";
+        if (status == 133) return " (generic Android GATT error)";
+        return "";
     }
 
     private void stopScan() {
