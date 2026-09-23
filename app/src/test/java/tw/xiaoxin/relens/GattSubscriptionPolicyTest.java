@@ -14,4 +14,9 @@ public class GattSubscriptionPolicyTest {
     @Test public void doesNotRetryUnrelatedGattFailure() {
         assertFalse(GattSubscriptionPolicy.shouldRediscover(5, 1));
     }
+
+    @Test public void firstGenerationUsesLocalNotificationRegistrationOnly() {
+        assertFalse(GattSubscriptionPolicy.requiresDescriptorWrite(1));
+        assertTrue(GattSubscriptionPolicy.requiresDescriptorWrite(2));
+    }
 }

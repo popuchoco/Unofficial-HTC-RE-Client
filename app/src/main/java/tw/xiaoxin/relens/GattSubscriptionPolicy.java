@@ -10,4 +10,9 @@ final class GattSubscriptionPolicy {
     static boolean shouldRediscover(int status, int completedAttempts) {
         return status == GATT_NOT_LONG && completedAttempts < MAX_ATTEMPTS;
     }
+
+    static boolean requiresDescriptorWrite(int controlProfile) {
+        // First-generation A000 firmware publishes a CCCD on A304 but rejects its write.
+        return controlProfile != 1;
+    }
 }

@@ -358,6 +358,13 @@ final class ReConnectionManager {
                 setP2p("無法啟用 RE 狀態通知");
                 return;
             }
+            if (!GattSubscriptionPolicy.requiresDescriptorWrite(controlProfile)) {
+                notificationsReady = true;
+                AppLog.i("BLE", "A000 local notification registration ready; A304 CCCD write skipped");
+                setP2p("RE 控制通道已就緒");
+                startWifiBootstrapIfReady();
+                return;
+            }
             int properties = notificationCharacteristic.getProperties();
             boolean indicateOnly = (properties & BluetoothGattCharacteristic.PROPERTY_NOTIFY) == 0
                     && (properties & BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0;
