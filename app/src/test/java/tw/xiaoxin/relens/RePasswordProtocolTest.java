@@ -14,6 +14,11 @@ public class RePasswordProtocolTest {
                 RePasswordProtocol.verificationPayload("re123"));
     }
 
+    @Test public void changePasswordUsesChangeOperation() {
+        assertArrayEquals(new byte[] {1, 'n', 'e', 'w', 0},
+                RePasswordProtocol.changePayload("new"));
+    }
+
     @Test public void resultSupportsDirectAndPrefixedNotifications() {
         assertEquals(1, RePasswordProtocol.verificationResult(new byte[] {1}));
         assertEquals(3, RePasswordProtocol.verificationResult(new byte[] {0, 3}));

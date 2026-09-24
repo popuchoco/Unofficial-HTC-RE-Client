@@ -54,6 +54,14 @@ final class ReConnectionManager {
     private static final byte WIFI_SET_PASSWORD_REQUEST = 0x23;
     private static final byte WIFI_CONFIG_STATUS_EVENT = 0x26;
     private static final long CONFIG_TIMEOUT_MS = 60_000L;
+    private static final int GROUP_INFO_MAX_ATTEMPTS = 12;
+    private static final long GROUP_INFO_RETRY_MS = 750L;
+    private static final int PASSWORD_NONE = 0;
+    private static final int PASSWORD_VERIFY_EXISTING = 1;
+    private static final int PASSWORD_SETUP_VERIFY_DEFAULT = 2;
+    private static final int PASSWORD_SETUP_CHANGE = 3;
+    private static final int PASSWORD_SETUP_VERIFY_NEW = 4;
+    private static final String FACTORY_PASSWORD = "00000000";
 
     private static ReConnectionManager instance;
     static synchronized ReConnectionManager get(Context context) {
@@ -93,6 +101,10 @@ final class ReConnectionManager {
     private boolean bootReadInFlight;
     private boolean securityProbeInFlight;
     private boolean passwordHandshakeInFlight;
+    private int passwordOperation;
+    private boolean passwordWriteComplete;
+    private int pendingPasswordResult = -1;
+    private String pendingNewPassword;
     private boolean bootWakeInFlight;
     private boolean bootPreparationComplete;
     private boolean gattConnectedSignal;
@@ -158,10 +170,42 @@ final class ReConnectionManager {
             setP2p("請先連線 HTC RE，再驗證相機密碼");
             return false;
         }
-        passwordHandshakeInFlight = true;
+        if (passwordHandshakeInFlight) {
+            setP2p("RE 密碼作業仍在進行，請稍候");
+            return false;
+        }
         setP2p("正在驗證 RE 相機密碼");
-        writePasswordVerification(gatt, cameraPassword);
-        return true;
+        return writePasswordVerification(gatt, cameraPassword, PASSWORD_VERIFY_EXISTING);
+    }
+
+    boolean beginInitialPasswordSetup(String newPassword, String confirmation) {
+        if (newPassword == null || newPassword.length() < 8 || newPassword.length() > 15) {
+            setP2p("新密碼必須為 8–15 個字元");
+            return false;
+        }
+        if (!newPassword.equals(confirmation)) {
+            setP2p("兩次輸入的新密碼不一致");
+            return false;
+        }
+        for (int index = 0; index < newPassword.length(); index++) {
+            char value = newPassword.charAt(index);
+            if (value < 0x20 || value > 0x7e) {
+                setP2p("新密碼目前僅支援英數字與半形符號");
+                return false;
+            }
+        }
+        if (gatt == null || !reGattConnected || gc1PasswordRequest == null
+                || gc1PasswordResult == null) {
+            setP2p("請先連線已重設的 HTC RE");
+            return false;
+        }
+        if (passwordHandshakeInFlight) {
+            setP2p("RE 密碼作業仍在進行，請稍候");
+            return false;
+        }
+        pendingNewPassword = newPassword;
+        setP2p("正在確認 RE 原廠密碼狀態");
+        return writePasswordVerification(gatt, FACTORY_PASSWORD, PASSWORD_SETUP_VERIFY_DEFAULT);
     }
 
     boolean bluetoothOn() {
@@ -236,6 +280,10 @@ final class ReConnectionManager {
         bootReadInFlight = false;
         securityProbeInFlight = false;
         passwordHandshakeInFlight = false;
+        passwordOperation = PASSWORD_NONE;
+        passwordWriteComplete = false;
+        pendingPasswordResult = -1;
+        pendingNewPassword = null;
         bootWakeInFlight = false;
         bootPreparationComplete = false;
         resetDiscoveryGate();
@@ -289,10 +337,8 @@ final class ReConnectionManager {
         try {
             manager.createGroup(channel, new WifiP2pManager.ActionListener() {
                 @Override public void onSuccess() {
-                    manager.requestGroupInfo(channel, group -> {
-                        if (group == null) { setP2p("無法讀取群組資訊"); return; }
-                        onP2pGroupReady(group);
-                    });
+                    AppLog.i("P2P", "createGroup accepted; waiting for owner group details");
+                    requestCreatedGroupInfo(manager, channel, 1);
                 }
                 @Override public void onFailure(int reason) {
                     p2pStartRequested = false;
@@ -305,8 +351,41 @@ final class ReConnectionManager {
         }
     }
 
+    private void requestCreatedGroupInfo(WifiP2pManager manager,
+            WifiP2pManager.Channel channel, int attempt) {
+        if (!p2pStartRequested || channel != p2pChannel) return;
+        try {
+            manager.requestGroupInfo(channel, group -> {
+                if (!p2pStartRequested || channel != p2pChannel) return;
+                if (group != null && group.isGroupOwner()
+                        && group.getNetworkName() != null && !group.getNetworkName().isEmpty()
+                        && group.getPassphrase() != null && !group.getPassphrase().isEmpty()) {
+                    AppLog.i("P2P", "Owner group details ready attempt=" + attempt);
+                    onP2pGroupReady(group);
+                    return;
+                }
+                if (attempt >= GROUP_INFO_MAX_ATTEMPTS) {
+                    p2pStartRequested = false;
+                    setP2p("群組已建立，但逾時仍無法取得 SSID／密碼");
+                    AppLog.w("P2P", "Group info unavailable after attempts=" + attempt
+                            + " groupPresent=" + (group != null));
+                    return;
+                }
+                setP2p("群組協商中（" + attempt + "/" + GROUP_INFO_MAX_ATTEMPTS + "）");
+                AppLog.i("P2P", "Group info not ready attempt=" + attempt
+                        + " groupPresent=" + (group != null));
+                main.postDelayed(() -> requestCreatedGroupInfo(manager, channel, attempt + 1),
+                        GROUP_INFO_RETRY_MS);
+            });
+        } catch (SecurityException error) {
+            p2pStartRequested = false;
+            setP2p("缺少 Wi-Fi 權限");
+        }
+    }
+
     private void onP2pGroupReady(WifiP2pGroup group) {
         pendingGroup = group;
+        p2pStartRequested = false;
         int frequency = Build.VERSION.SDK_INT >= 29 ? group.getFrequency() : 0;
         setP2p("群組已建立" + (frequency > 0 ? " · " + frequency + " MHz" : ""));
         startWifiBootstrapIfReady();
@@ -410,7 +489,8 @@ final class ReConnectionManager {
                     setP2p("無法啟用 RE 密碼驗證通道（status=" + status + "）");
                     return;
                 }
-                main.postDelayed(() -> writePasswordVerification(current, cameraPassword), 500L);
+                main.postDelayed(() -> writePasswordVerification(current, cameraPassword,
+                        PASSWORD_VERIFY_EXISTING), 500L);
                 return;
             }
             if (controlProfile == 1 && (GC1_NOTIFY_PRIMARY.equals(source)
@@ -471,11 +551,24 @@ final class ReConnectionManager {
 
         @Override public void onCharacteristicWrite(BluetoothGatt current, BluetoothGattCharacteristic characteristic, int status) {
             if (GC1_PASSWORD_REQUEST.equals(characteristic.getUuid())) {
-                AppLog.i("BLE", "A105 password verification write status=" + status);
+                AppLog.i("BLE", "A105 password operation=" + passwordOperation
+                        + " write status=" + status);
                 if (status != BluetoothGatt.GATT_SUCCESS
                         && !GattSubscriptionPolicy.isLegacyAttributeNotLong(status)) {
-                    passwordHandshakeInFlight = false;
-                    setP2p("RE 密碼驗證請求失敗（status=" + status + "）");
+                    resetPasswordOperation();
+                    setP2p("RE 密碼作業失敗（status=" + status + "）");
+                    return;
+                }
+                passwordWriteComplete = true;
+                if (passwordOperation == PASSWORD_SETUP_CHANGE) {
+                    String nextPassword = pendingNewPassword;
+                    resetPasswordOperationState(false);
+                    main.postDelayed(() -> {
+                        setP2p("新密碼已寫入，正在重新驗證");
+                        writePasswordVerification(current, nextPassword, PASSWORD_SETUP_VERIFY_NEW);
+                    }, 500L);
+                } else {
+                    completePasswordVerificationIfReady(current);
                 }
                 return;
             }
@@ -539,19 +632,12 @@ final class ReConnectionManager {
             UUID id = characteristic.getUuid();
             byte[] value = characteristic.getValue();
             if (GC1_PASSWORD_RESULT.equals(id)) {
-                passwordHandshakeInFlight = false;
                 int result = RePasswordProtocol.verificationResult(value);
                 AppLog.i("BLE", "A106 password verification result=" + result
                         + " length=" + (value == null ? 0 : value.length));
-                if (result == 0 || result == 2) {
-                    pendingNotificationCharacteristic = null;
-                    setP2p("RE 密碼驗證完成");
-                    enableStatusNotifications(current, gc1PhoneResult);
-                } else if (result == 1 || result == 3) {
-                    setP2p("RE 已設定密碼，請輸入相機密碼");
-                } else {
-                    setP2p("RE 密碼驗證沒有有效回覆");
-                }
+                if (passwordOperation == PASSWORD_SETUP_CHANGE) return;
+                pendingPasswordResult = result;
+                completePasswordVerificationIfReady(current);
                 return;
             }
             if ((GC1_NOTIFY_PRIMARY.equals(id) || GC1_NOTIFY_SECONDARY.equals(id))
@@ -697,14 +783,90 @@ final class ReConnectionManager {
         }
     }
 
-    private void writePasswordVerification(BluetoothGatt current, String password) {
-        if (current == null || current != gatt || !reGattConnected || gc1PasswordRequest == null) return;
+    private boolean writePasswordVerification(BluetoothGatt current, String password, int operation) {
+        if (current == null || current != gatt || !reGattConnected || gc1PasswordRequest == null) return false;
         byte[] payload = RePasswordProtocol.verificationPayload(password);
+        passwordHandshakeInFlight = true;
+        passwordOperation = operation;
+        passwordWriteComplete = false;
+        pendingPasswordResult = -1;
         AppLog.i("BLE", "Writing A105 password verification length=" + payload.length);
         if (!writeGattPacket(GC1_PASSWORD_REQUEST, payload)) {
-            passwordHandshakeInFlight = false;
+            resetPasswordOperation();
             setP2p("無法送出 RE 密碼驗證請求");
+            return false;
         }
+        return true;
+    }
+
+    private boolean writePasswordChange(BluetoothGatt current, String password) {
+        byte[] payload = RePasswordProtocol.changePayload(password);
+        passwordHandshakeInFlight = true;
+        passwordOperation = PASSWORD_SETUP_CHANGE;
+        passwordWriteComplete = false;
+        pendingPasswordResult = -1;
+        AppLog.i("BLE", "Writing A105 initial password setup length=" + payload.length);
+        if (!writeGattPacket(GC1_PASSWORD_REQUEST, payload)) {
+            resetPasswordOperation();
+            setP2p("無法送出 RE 新密碼設定");
+            return false;
+        }
+        return true;
+    }
+
+    private void completePasswordVerificationIfReady(BluetoothGatt current) {
+        if (!passwordWriteComplete || pendingPasswordResult < 0) return;
+        int operation = passwordOperation;
+        int result = pendingPasswordResult;
+        resetPasswordOperationState(false);
+        if (operation == PASSWORD_SETUP_VERIFY_DEFAULT) {
+            if (result == 0) {
+                setP2p("原廠密碼已確認，正在設定新密碼");
+                writePasswordChange(current, pendingNewPassword);
+            } else {
+                pendingNewPassword = null;
+                setP2p("RE 不在原廠密碼狀態，請先執行硬體重設");
+            }
+            return;
+        }
+        if (operation == PASSWORD_SETUP_VERIFY_NEW) {
+            if (result == 2) {
+                cameraPassword = pendingNewPassword;
+                pendingNewPassword = null;
+                finishPasswordVerification(current, "RE 首次密碼設定完成");
+            } else {
+                pendingNewPassword = null;
+                setP2p("新密碼寫入後驗證失敗，請重新連線後再試");
+            }
+            return;
+        }
+        if (result == 2) {
+            finishPasswordVerification(current, "RE 密碼驗證完成");
+        } else if (result == 0) {
+            setP2p("RE 使用原廠密碼，請完成首次密碼設定");
+        } else if (result == 1 || result == 3) {
+            setP2p("RE 已設定密碼，請輸入正確的相機密碼");
+        } else {
+            setP2p("RE 密碼驗證沒有有效回覆");
+        }
+    }
+
+    private void finishPasswordVerification(BluetoothGatt current, String message) {
+        pendingNotificationCharacteristic = null;
+        setP2p(message);
+        enableStatusNotifications(current, gc1PhoneResult);
+    }
+
+    private void resetPasswordOperation() {
+        resetPasswordOperationState(true);
+    }
+
+    private void resetPasswordOperationState(boolean clearPendingPassword) {
+        passwordHandshakeInFlight = false;
+        passwordOperation = PASSWORD_NONE;
+        passwordWriteComplete = false;
+        pendingPasswordResult = -1;
+        if (clearPendingPassword) pendingNewPassword = null;
     }
 
     private void writeNotificationDescriptor(BluetoothGatt current,
@@ -958,7 +1120,7 @@ final class ReConnectionManager {
     private void clearGc1Characteristics() {
         bootReadInFlight = false;
         securityProbeInFlight = false;
-        passwordHandshakeInFlight = false;
+        resetPasswordOperation();
         bootWakeInFlight = false;
         bootPreparationComplete = false;
         gc1BootReady = null;
