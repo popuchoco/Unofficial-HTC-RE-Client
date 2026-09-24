@@ -4,7 +4,7 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前修正版：`0.4.8`。針對早期 RE 韌體在現代 Android 回傳的 ATT `status=11`，A101 與 multiplex notification 採相容處理並保留詳細診斷，讓連線流程繼續驗證 Wi‑Fi bootstrap。
+> 目前修正版：`0.4.9`。第一代 RE 連線會先經由 `A106/A105` 完成相機密碼驗證，成功後才啟用 multiplex notification 與 Wi‑Fi bootstrap；已設定密碼時會明確提示。
 
 - 「連線」頁位於最左側：BLE 掃描／連線、Wi-Fi Direct group、背景連線、斷線提醒及藍牙／Wi-Fi 狀態。
 - 連線層以序列 GATT 佇列傳送 Wi-Fi Direct SSID、密碼與 station/config；每一個封包都必須收到 characteristic callback 才會前進。

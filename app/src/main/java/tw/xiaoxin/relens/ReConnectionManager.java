@@ -40,6 +40,8 @@ final class ReConnectionManager {
     private static final UUID GC1_SERVICE = UUID.fromString("0000a000-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_BOOT_READY = UUID.fromString("0000a101-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_BOOT_COMMAND = UUID.fromString("0000a107-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_PASSWORD_REQUEST = UUID.fromString("0000a105-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_PASSWORD_RESULT = UUID.fromString("0000a106-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_SERVER_BAND = UUID.fromString("0000a201-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PHONE_SSID = UUID.fromString("0000a301-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PHONE_PASSWORD = UUID.fromString("0000a302-0000-1000-8000-00805f9b34fb");
@@ -70,6 +72,8 @@ final class ReConnectionManager {
     private BluetoothGattCharacteristic longCommand;
     private BluetoothGattCharacteristic gc1BootReady;
     private BluetoothGattCharacteristic gc1BootCommand;
+    private BluetoothGattCharacteristic gc1PasswordRequest;
+    private BluetoothGattCharacteristic gc1PasswordResult;
     private BluetoothGattCharacteristic gc1ServerBand;
     private BluetoothGattCharacteristic gc1PhoneSsid;
     private BluetoothGattCharacteristic gc1PhonePassword;
@@ -88,6 +92,7 @@ final class ReConnectionManager {
     private boolean p2pStartRequested;
     private boolean bootReadInFlight;
     private boolean securityProbeInFlight;
+    private boolean passwordHandshakeInFlight;
     private boolean bootWakeInFlight;
     private boolean bootPreparationComplete;
     private boolean gattConnectedSignal;
@@ -212,6 +217,7 @@ final class ReConnectionManager {
         cameraIp = null;
         bootReadInFlight = false;
         securityProbeInFlight = false;
+        passwordHandshakeInFlight = false;
         bootWakeInFlight = false;
         bootPreparationComplete = false;
         resetDiscoveryGate();
@@ -342,6 +348,8 @@ final class ReConnectionManager {
                 controlProfile = 1;
                 gc1BootReady = gc1.getCharacteristic(GC1_BOOT_READY);
                 gc1BootCommand = gc1.getCharacteristic(GC1_BOOT_COMMAND);
+                gc1PasswordRequest = gc1.getCharacteristic(GC1_PASSWORD_REQUEST);
+                gc1PasswordResult = gc1.getCharacteristic(GC1_PASSWORD_RESULT);
                 gc1ServerBand = gc1.getCharacteristic(GC1_SERVER_BAND);
                 gc1PhoneSsid = gc1.getCharacteristic(GC1_PHONE_SSID);
                 gc1PhonePassword = gc1.getCharacteristic(GC1_PHONE_PASSWORD);
@@ -376,6 +384,17 @@ final class ReConnectionManager {
         @Override public void onDescriptorWrite(BluetoothGatt current, BluetoothGattDescriptor descriptor, int status) {
             if (!CCCD.equals(descriptor.getUuid())) return;
             UUID source = descriptor.getCharacteristic().getUuid();
+            if (controlProfile == 1 && GC1_PASSWORD_RESULT.equals(source)) {
+                AppLog.i("BLE", "A106 password CCCD status=" + status);
+                if (status != BluetoothGatt.GATT_SUCCESS
+                        && !GattSubscriptionPolicy.isLegacyAttributeNotLong(status)) {
+                    passwordHandshakeInFlight = false;
+                    setP2p("無法啟用 RE 密碼驗證通道（status=" + status + "）");
+                    return;
+                }
+                main.postDelayed(() -> writePasswordVerification(current, ""), 500L);
+                return;
+            }
             if (controlProfile == 1 && (GC1_NOTIFY_PRIMARY.equals(source)
                     || GC1_NOTIFY_SECONDARY.equals(source))) {
                 AppLog.i("BLE", "GC1 multiplex CCCD status=" + status + " characteristic=" + source);
@@ -433,6 +452,15 @@ final class ReConnectionManager {
         }
 
         @Override public void onCharacteristicWrite(BluetoothGatt current, BluetoothGattCharacteristic characteristic, int status) {
+            if (GC1_PASSWORD_REQUEST.equals(characteristic.getUuid())) {
+                AppLog.i("BLE", "A105 password verification write status=" + status);
+                if (status != BluetoothGatt.GATT_SUCCESS
+                        && !GattSubscriptionPolicy.isLegacyAttributeNotLong(status)) {
+                    passwordHandshakeInFlight = false;
+                    setP2p("RE 密碼驗證請求失敗（status=" + status + "）");
+                }
+                return;
+            }
             if (bootWakeInFlight && GC1_BOOT_COMMAND.equals(characteristic.getUuid())) {
                 bootWakeInFlight = false;
                 if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -492,6 +520,21 @@ final class ReConnectionManager {
         @Override public void onCharacteristicChanged(BluetoothGatt current, BluetoothGattCharacteristic characteristic) {
             UUID id = characteristic.getUuid();
             byte[] value = characteristic.getValue();
+            if (GC1_PASSWORD_RESULT.equals(id)) {
+                passwordHandshakeInFlight = false;
+                int result = value == null || value.length == 0 ? -1 : value[0] & 0xff;
+                AppLog.i("BLE", "A106 password verification result=" + result);
+                if (result == 0 || result == 2) {
+                    pendingNotificationCharacteristic = null;
+                    setP2p("RE 密碼驗證完成");
+                    enableStatusNotifications(current, gc1PhoneResult);
+                } else if (result == 1 || result == 3) {
+                    setP2p("RE 已設定密碼，請輸入相機密碼");
+                } else {
+                    setP2p("RE 密碼驗證沒有有效回覆");
+                }
+                return;
+            }
             if ((GC1_NOTIFY_PRIMARY.equals(id) || GC1_NOTIFY_SECONDARY.equals(id))
                     && value != null && value.length > 1) {
                 UUID mapped = gc1EventCharacteristic(value[0]);
@@ -524,7 +567,7 @@ final class ReConnectionManager {
             if (state == BluetoothDevice.BOND_BONDED && pendingNotificationCharacteristic != null) {
                 setP2p("BLE 安全配對完成，保持目前 GATT 連線");
                 AppLog.i("BLE", "Bond completed; retaining active GATT");
-                main.postDelayed(() -> beginSecurityProbe(gatt), 500L);
+                main.postDelayed(() -> beginPasswordHandshake(gatt), 500L);
             } else if (state == BluetoothDevice.BOND_NONE && previous == BluetoothDevice.BOND_BONDING) {
                 pendingNotificationCharacteristic = null;
                 setP2p("HTC RE BLE 配對失敗");
@@ -539,13 +582,13 @@ final class ReConnectionManager {
             int bondState = device.getBondState();
             AppLog.i("BLE", "A000 bond state=" + bondState);
             if (bondState == BluetoothDevice.BOND_BONDED) {
-                enableStatusNotifications(current, characteristic);
+                beginPasswordHandshake(current);
                 return;
             }
             pendingNotificationCharacteristic = characteristic;
-            setP2p("正在以 RE 啟動狀態協商安全配對");
-            AppLog.i("BLE", "Starting A101 security probe before multiplex subscription");
-            beginSecurityProbe(current);
+            setP2p("正在建立 RE 密碼驗證通道");
+            AppLog.i("BLE", "Starting A106/A105 password handshake before multiplex subscription");
+            beginPasswordHandshake(current);
         } catch (SecurityException error) {
             pendingNotificationCharacteristic = null;
             setP2p("缺少藍牙配對權限");
@@ -604,6 +647,47 @@ final class ReConnectionManager {
             securityProbeInFlight = false;
             bootReadInFlight = false;
             setP2p("缺少藍牙連線權限");
+        }
+    }
+
+    private void beginPasswordHandshake(BluetoothGatt current) {
+        if (current == null || current != gatt || !reGattConnected || gc1PasswordResult == null
+                || passwordHandshakeInFlight) return;
+        BluetoothGattDescriptor descriptor = gc1PasswordResult.getDescriptor(CCCD);
+        if (descriptor == null) {
+            setP2p("找不到 RE 密碼驗證描述元");
+            return;
+        }
+        try {
+            passwordHandshakeInFlight = true;
+            if (!current.setCharacteristicNotification(gc1PasswordResult, true)) {
+                passwordHandshakeInFlight = false;
+                setP2p("無法啟用 RE 密碼驗證通知");
+                return;
+            }
+            descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            AppLog.i("BLE", "Subscribing A106 password result properties="
+                    + gc1PasswordResult.getProperties());
+            if (!current.writeDescriptor(descriptor)) {
+                passwordHandshakeInFlight = false;
+                setP2p("無法送出 RE 密碼驗證訂閱");
+            }
+        } catch (SecurityException error) {
+            passwordHandshakeInFlight = false;
+            setP2p("缺少藍牙連線權限");
+        }
+    }
+
+    private void writePasswordVerification(BluetoothGatt current, String password) {
+        if (current == null || current != gatt || !reGattConnected || gc1PasswordRequest == null) return;
+        byte[] text = password.getBytes(StandardCharsets.US_ASCII);
+        byte[] payload = new byte[text.length + 1];
+        payload[0] = 0;
+        System.arraycopy(text, 0, payload, 1, text.length);
+        AppLog.i("BLE", "Writing A105 password verification length=" + payload.length);
+        if (!writeGattPacket(GC1_PASSWORD_REQUEST, payload)) {
+            passwordHandshakeInFlight = false;
+            setP2p("無法送出 RE 密碼驗證請求");
         }
     }
 
@@ -835,6 +919,7 @@ final class ReConnectionManager {
 
     private boolean hasRequiredCharacteristics() {
         if (controlProfile == 1) return gc1BootReady != null && gc1BootCommand != null
+                && gc1PasswordRequest != null && gc1PasswordResult != null
                 && gc1ServerBand != null && gc1PhoneSsid != null
                 && gc1PhonePassword != null && gc1PhoneConfig != null && gc1PhoneResult != null
                 && gc1NotifyPrimary != null && gc1NotifySecondary != null;
@@ -846,6 +931,7 @@ final class ReConnectionManager {
         if (SHORT_COMMAND.equals(id)) return shortCommand;
         if (LONG_COMMAND.equals(id)) return longCommand;
         if (GC1_BOOT_COMMAND.equals(id)) return gc1BootCommand;
+        if (GC1_PASSWORD_REQUEST.equals(id)) return gc1PasswordRequest;
         if (GC1_SERVER_BAND.equals(id)) return gc1ServerBand;
         if (GC1_PHONE_SSID.equals(id)) return gc1PhoneSsid;
         if (GC1_PHONE_PASSWORD.equals(id)) return gc1PhonePassword;
@@ -856,10 +942,13 @@ final class ReConnectionManager {
     private void clearGc1Characteristics() {
         bootReadInFlight = false;
         securityProbeInFlight = false;
+        passwordHandshakeInFlight = false;
         bootWakeInFlight = false;
         bootPreparationComplete = false;
         gc1BootReady = null;
         gc1BootCommand = null;
+        gc1PasswordRequest = null;
+        gc1PasswordResult = null;
         gc1ServerBand = null;
         gc1PhoneSsid = null;
         gc1PhonePassword = null;
