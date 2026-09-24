@@ -26,4 +26,10 @@ public class GattSubscriptionPolicyTest {
         assertFalse(GattSubscriptionPolicy.shouldRetryMultiplex(11, 10));
         assertFalse(GattSubscriptionPolicy.shouldRetryMultiplex(0, 1));
     }
+
+    @Test public void recognizesLegacyAttributeNotLongCompatibilityStatus() {
+        assertTrue(GattSubscriptionPolicy.isLegacyAttributeNotLong(11));
+        assertFalse(GattSubscriptionPolicy.isLegacyAttributeNotLong(0));
+        assertFalse(GattSubscriptionPolicy.isLegacyAttributeNotLong(13));
+    }
 }

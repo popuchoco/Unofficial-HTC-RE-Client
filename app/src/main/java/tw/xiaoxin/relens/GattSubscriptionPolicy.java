@@ -20,4 +20,8 @@ final class GattSubscriptionPolicy {
     static boolean shouldRetryMultiplex(int status, int startedAttempts) {
         return status != 0 && startedAttempts < MAX_MULTIPLEX_ATTEMPTS;
     }
+
+    static boolean isLegacyAttributeNotLong(int status) {
+        return status == GATT_NOT_LONG;
+    }
 }

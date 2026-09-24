@@ -379,7 +379,11 @@ final class ReConnectionManager {
             if (controlProfile == 1 && (GC1_NOTIFY_PRIMARY.equals(source)
                     || GC1_NOTIFY_SECONDARY.equals(source))) {
                 AppLog.i("BLE", "GC1 multiplex CCCD status=" + status + " characteristic=" + source);
-                if (status != BluetoothGatt.GATT_SUCCESS) {
+                boolean legacyNotLong = GattSubscriptionPolicy.isLegacyAttributeNotLong(status);
+                if (legacyNotLong) {
+                    AppLog.w("BLE", "Accepting local multiplex registration for legacy status=11 characteristic="
+                            + source);
+                } else if (status != BluetoothGatt.GATT_SUCCESS) {
                     if (GattSubscriptionPolicy.shouldRetryMultiplex(status,
                             multiplexSubscriptionAttempts)) {
                         int nextAttempt = multiplexSubscriptionAttempts + 1;
@@ -450,14 +454,19 @@ final class ReConnectionManager {
             bootReadInFlight = false;
             if (securityProbeInFlight) {
                 securityProbeInFlight = false;
-                if (status != BluetoothGatt.GATT_SUCCESS) {
+                byte[] probeValue = characteristic.getValue();
+                int probeLength = probeValue == null ? 0 : probeValue.length;
+                AppLog.i("BLE", "A101 security probe callback status=" + status
+                        + " valueLength=" + probeLength);
+                if (status != BluetoothGatt.GATT_SUCCESS
+                        && !GattSubscriptionPolicy.isLegacyAttributeNotLong(status)) {
                     AppLog.w("BLE", "A101 security probe failed status=" + status);
                     setP2p("RE 安全通道協商中（status=" + status + "）");
                     return;
                 }
                 BluetoothGattCharacteristic pending = pendingNotificationCharacteristic;
                 pendingNotificationCharacteristic = null;
-                AppLog.i("BLE", "A101 security probe accepted; enabling multiplex notifications");
+                AppLog.i("BLE", "A101 security probe compatibility path; enabling multiplex notifications");
                 if (pending != null) {
                     main.postDelayed(() -> enableStatusNotifications(current, pending), 500L);
                 }
