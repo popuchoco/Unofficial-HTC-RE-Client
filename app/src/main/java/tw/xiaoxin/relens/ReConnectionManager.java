@@ -557,15 +557,9 @@ final class ReConnectionManager {
                     + " descriptorPermissions=" + descriptor.getPermissions()
                     + " valueLength=" + cccdValue.length
                     + " attempt=" + notificationSubscriptionAttempts);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                int result = current.writeDescriptor(descriptor, cccdValue);
-                if (result != android.bluetooth.BluetoothStatusCodes.SUCCESS) {
-                    setP2p("無法送出狀態通知設定（result=" + result + "）");
-                }
-            } else {
-                descriptor.setValue(cccdValue);
-                if (!current.writeDescriptor(descriptor)) setP2p("無法送出狀態通知設定");
-            }
+            // targetSdk 32 intentionally uses the mutable GATT API required by legacy RE firmware.
+            descriptor.setValue(cccdValue);
+            if (!current.writeDescriptor(descriptor)) setP2p("無法送出狀態通知設定");
         } catch (SecurityException error) {
             setP2p("缺少藍牙連線權限");
         }
@@ -592,16 +586,9 @@ final class ReConnectionManager {
             multiplexSubscriptionAttempts++;
             AppLog.i("BLE", "Subscribing GC1 multiplex " + label + " properties="
                     + characteristic.getProperties() + " attempt=" + multiplexSubscriptionAttempts);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                int result = current.writeDescriptor(descriptor, value);
-                if (result != android.bluetooth.BluetoothStatusCodes.SUCCESS) {
-                    setP2p("無法送出 RE " + label + " 訂閱（result=" + result + "）");
-                }
-            } else {
-                descriptor.setValue(value);
-                if (!current.writeDescriptor(descriptor)) {
-                    setP2p("無法送出 RE " + label + " 訂閱");
-                }
+            descriptor.setValue(value);
+            if (!current.writeDescriptor(descriptor)) {
+                setP2p("無法送出 RE " + label + " 訂閱");
             }
         } catch (SecurityException error) {
             setP2p("缺少藍牙連線權限");
@@ -784,11 +771,6 @@ final class ReConnectionManager {
             AppLog.i("BLE", "Writing characteristic=" + characteristicId
                     + " length=" + value.length + " writeType="
                     + BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                return current.writeCharacteristic(characteristic, value,
-                        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-                        == android.bluetooth.BluetoothStatusCodes.SUCCESS;
-            }
             characteristic.setValue(value);
             return current.writeCharacteristic(characteristic);
         } catch (SecurityException error) {
