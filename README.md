@@ -4,7 +4,7 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前修正版：`0.4.5`。BLE 保留同步探索與序列重試，並配合 target SDK 32，使用舊式 mutable GATT descriptor／characteristic 寫入，以相容早期 RE 韌體。
+> 目前修正版：`0.4.6`。BLE 安全配對改由受保護的控制通道操作觸發；bond 完成後保留同一個 GATT，不再主動配對或中斷剛建立的加密鏈路。
 
 - 「連線」頁位於最左側：BLE 掃描／連線、Wi-Fi Direct group、背景連線、斷線提醒及藍牙／Wi-Fi 狀態。
 - 連線層以序列 GATT 佇列傳送 Wi-Fi Direct SSID、密碼與 station/config；每一個封包都必須收到 characteristic callback 才會前進。

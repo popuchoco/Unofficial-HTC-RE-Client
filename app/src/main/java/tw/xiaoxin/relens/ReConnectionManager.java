@@ -89,7 +89,6 @@ final class ReConnectionManager {
     private boolean bootReadInFlight;
     private boolean bootWakeInFlight;
     private boolean bootPreparationComplete;
-    private boolean gattReplacementInProgress;
     private boolean gattConnectedSignal;
     private boolean aclConnectedSignal;
     private boolean serviceDiscoveryStarted;
@@ -213,7 +212,6 @@ final class ReConnectionManager {
         bootReadInFlight = false;
         bootWakeInFlight = false;
         bootPreparationComplete = false;
-        gattReplacementInProgress = false;
         resetDiscoveryGate();
         pendingNotificationCharacteristic = null;
         notificationSubscriptionAttempts = 0;
@@ -293,7 +291,7 @@ final class ReConnectionManager {
             if (current != gatt) {
                 AppLog.i("BLE", "Ignoring callback from replaced GATT status=" + status
                         + " state=" + newState);
-                if (newState == BluetoothProfile.STATE_DISCONNECTED && !gattReplacementInProgress) {
+                if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     try { current.close(); } catch (SecurityException ignored) { }
                 }
                 return;
@@ -499,8 +497,8 @@ final class ReConnectionManager {
             AppLog.i("BLE", "Bond state " + previous + " -> " + state);
             if (state == BluetoothDevice.BOND_BONDED && pendingNotificationCharacteristic != null) {
                 pendingNotificationCharacteristic = null;
-                setP2p("BLE 配對完成，正在重建安全 GATT 連線…");
-                reconnectAfterBond(device);
+                setP2p("BLE 安全配對完成，保持目前 GATT 連線");
+                AppLog.i("BLE", "Bond completed; retaining active GATT");
             } else if (state == BluetoothDevice.BOND_NONE && previous == BluetoothDevice.BOND_BONDING) {
                 pendingNotificationCharacteristic = null;
                 setP2p("HTC RE BLE 配對失敗");
@@ -519,11 +517,9 @@ final class ReConnectionManager {
                 return;
             }
             pendingNotificationCharacteristic = characteristic;
-            setP2p("正在建立 HTC RE BLE 配對");
-            if (bondState == BluetoothDevice.BOND_NONE && !device.createBond()) {
-                pendingNotificationCharacteristic = null;
-                setP2p("無法啟動 HTC RE BLE 配對");
-            }
+            setP2p("正在由 RE 控制通道協商安全配對");
+            AppLog.i("BLE", "Deferring pairing to protected GATT operation");
+            enableStatusNotifications(current, characteristic);
         } catch (SecurityException error) {
             pendingNotificationCharacteristic = null;
             setP2p("缺少藍牙配對權限");
@@ -616,34 +612,6 @@ final class ReConnectionManager {
         } catch (SecurityException error) {
             setP2p("缺少藍牙連線權限");
         }
-    }
-
-    private void reconnectAfterBond(BluetoothDevice device) {
-        if (gattReplacementInProgress || device == null) return;
-        BluetoothGatt oldGatt = gatt;
-        if (oldGatt == null) return;
-        gattReplacementInProgress = true;
-        gatt = null;
-        reGattConnected = false;
-        notificationsReady = false;
-        commandQueue.cancel();
-        clearGc1Characteristics();
-        controlProfile = 0;
-        main.removeCallbacks(serviceDiscoveryFallback);
-        resetDiscoveryGate();
-        AppLog.i("BLE", "Reconnecting GATT after bond completion without cache refresh");
-        try { oldGatt.disconnect(); } catch (SecurityException ignored) { }
-        main.postDelayed(() -> {
-            try { oldGatt.close(); } catch (SecurityException ignored) { }
-            try {
-                gattReplacementInProgress = false;
-                setBle("正在重建安全連線");
-                gatt = device.connectGatt(context, false, gattCallback);
-            } catch (SecurityException error) {
-                gattReplacementInProgress = false;
-                setBle("缺少藍牙連線權限");
-            }
-        }, 700L);
     }
 
     private void maybeStartServiceDiscovery() {
