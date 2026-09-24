@@ -87,6 +87,7 @@ final class ReConnectionManager {
     private boolean awaitingConfigStatus;
     private boolean p2pStartRequested;
     private boolean bootReadInFlight;
+    private boolean securityProbeInFlight;
     private boolean bootWakeInFlight;
     private boolean bootPreparationComplete;
     private boolean gattConnectedSignal;
@@ -210,6 +211,7 @@ final class ReConnectionManager {
         p2pStartRequested = false;
         cameraIp = null;
         bootReadInFlight = false;
+        securityProbeInFlight = false;
         bootWakeInFlight = false;
         bootPreparationComplete = false;
         resetDiscoveryGate();
@@ -446,6 +448,21 @@ final class ReConnectionManager {
                 BluetoothGattCharacteristic characteristic, int status) {
             if (!GC1_BOOT_READY.equals(characteristic.getUuid())) return;
             bootReadInFlight = false;
+            if (securityProbeInFlight) {
+                securityProbeInFlight = false;
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    AppLog.w("BLE", "A101 security probe failed status=" + status);
+                    setP2p("RE 安全通道協商中（status=" + status + "）");
+                    return;
+                }
+                BluetoothGattCharacteristic pending = pendingNotificationCharacteristic;
+                pendingNotificationCharacteristic = null;
+                AppLog.i("BLE", "A101 security probe accepted; enabling multiplex notifications");
+                if (pending != null) {
+                    main.postDelayed(() -> enableStatusNotifications(current, pending), 500L);
+                }
+                return;
+            }
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 setP2p("無法讀取 RE 啟動狀態（status=" + status + "）");
                 AppLog.w("BLE", "Boot-ready read failed status=" + status);
@@ -496,9 +513,9 @@ final class ReConnectionManager {
             int previous = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, BluetoothDevice.ERROR);
             AppLog.i("BLE", "Bond state " + previous + " -> " + state);
             if (state == BluetoothDevice.BOND_BONDED && pendingNotificationCharacteristic != null) {
-                pendingNotificationCharacteristic = null;
                 setP2p("BLE 安全配對完成，保持目前 GATT 連線");
                 AppLog.i("BLE", "Bond completed; retaining active GATT");
+                main.postDelayed(() -> beginSecurityProbe(gatt), 500L);
             } else if (state == BluetoothDevice.BOND_NONE && previous == BluetoothDevice.BOND_BONDING) {
                 pendingNotificationCharacteristic = null;
                 setP2p("HTC RE BLE 配對失敗");
@@ -517,9 +534,9 @@ final class ReConnectionManager {
                 return;
             }
             pendingNotificationCharacteristic = characteristic;
-            setP2p("正在由 RE 控制通道協商安全配對");
-            AppLog.i("BLE", "Deferring pairing to protected GATT operation");
-            enableStatusNotifications(current, characteristic);
+            setP2p("正在以 RE 啟動狀態協商安全配對");
+            AppLog.i("BLE", "Starting A101 security probe before multiplex subscription");
+            beginSecurityProbe(current);
         } catch (SecurityException error) {
             pendingNotificationCharacteristic = null;
             setP2p("缺少藍牙配對權限");
@@ -557,6 +574,26 @@ final class ReConnectionManager {
             descriptor.setValue(cccdValue);
             if (!current.writeDescriptor(descriptor)) setP2p("無法送出狀態通知設定");
         } catch (SecurityException error) {
+            setP2p("缺少藍牙連線權限");
+        }
+    }
+
+    private void beginSecurityProbe(BluetoothGatt current) {
+        if (current == null || current != gatt || !reGattConnected || gc1BootReady == null
+                || securityProbeInFlight) return;
+        try {
+            securityProbeInFlight = true;
+            bootReadInFlight = true;
+            AppLog.i("BLE", "Reading A101 as security probe properties="
+                    + gc1BootReady.getProperties());
+            if (!current.readCharacteristic(gc1BootReady)) {
+                securityProbeInFlight = false;
+                bootReadInFlight = false;
+                setP2p("Android 無法送出 RE 安全探測");
+            }
+        } catch (SecurityException error) {
+            securityProbeInFlight = false;
+            bootReadInFlight = false;
             setP2p("缺少藍牙連線權限");
         }
     }
@@ -809,6 +846,7 @@ final class ReConnectionManager {
 
     private void clearGc1Characteristics() {
         bootReadInFlight = false;
+        securityProbeInFlight = false;
         bootWakeInFlight = false;
         bootPreparationComplete = false;
         gc1BootReady = null;
