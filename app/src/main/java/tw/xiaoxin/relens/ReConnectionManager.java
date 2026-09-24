@@ -24,7 +24,6 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import java.nio.charset.StandardCharsets;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -90,8 +89,11 @@ final class ReConnectionManager {
     private boolean bootReadInFlight;
     private boolean bootWakeInFlight;
     private boolean bootPreparationComplete;
-    private boolean freshGattForBond;
     private boolean gattReplacementInProgress;
+    private boolean gattConnectedSignal;
+    private boolean aclConnectedSignal;
+    private boolean serviceDiscoveryStarted;
+    private int emptyServiceDiscoveryRetries;
     private int notificationSubscriptionAttempts;
     private String cameraIp;
     private String ble = "未連線";
@@ -105,10 +107,12 @@ final class ReConnectionManager {
         setP2p("RE 加入逾時，請重試");
         AppLog.w("BLE", "Wi-Fi config status timeout");
     };
+    private final Runnable serviceDiscoveryFallback = () -> startServiceDiscovery("ACL fallback");
 
     private ReConnectionManager(Context context) {
         this.context = context;
         IntentFilter bondFilter = new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+        bondFilter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
         context.registerReceiver(bondReceiver, bondFilter);
         commandQueue = new GattCommandQueue(this::writeGattPacket, new GattCommandQueue.Listener() {
             @Override public void onProgress(String label, int remaining) {
@@ -183,7 +187,8 @@ final class ReConnectionManager {
         BluetoothDevice device = manager.getAdapter().getRemoteDevice(foundAddress);
         disconnect(false);
         setBle("正在連線");
-        try { gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE); }
+        resetDiscoveryGate();
+        try { gatt = device.connectGatt(context, false, gattCallback); }
         catch (SecurityException error) { setBle("缺少藍牙連線權限"); }
     }
 
@@ -192,6 +197,7 @@ final class ReConnectionManager {
     private void disconnect(boolean updateState) {
         stopScan();
         main.removeCallbacks(configTimeout);
+        main.removeCallbacks(serviceDiscoveryFallback);
         commandQueue.cancel();
         awaitingConfigStatus = false;
         reGattConnected = false;
@@ -206,8 +212,8 @@ final class ReConnectionManager {
         bootReadInFlight = false;
         bootWakeInFlight = false;
         bootPreparationComplete = false;
-        freshGattForBond = false;
         gattReplacementInProgress = false;
+        resetDiscoveryGate();
         pendingNotificationCharacteristic = null;
         notificationSubscriptionAttempts = 0;
         if (gatt != null) {
@@ -292,9 +298,12 @@ final class ReConnectionManager {
             }
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 reGattConnected = true;
+                gattConnectedSignal = true;
                 setBle("已連線");
                 AppLog.i("BLE", "GATT connected status=" + status);
-                try { current.discoverServices(); } catch (SecurityException ignored) { }
+                maybeStartServiceDiscovery();
+                main.removeCallbacks(serviceDiscoveryFallback);
+                main.postDelayed(serviceDiscoveryFallback, 3_000L);
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 reGattConnected = false;
                 notificationsReady = false;
@@ -304,6 +313,8 @@ final class ReConnectionManager {
                 controlProfile = 0;
                 pendingNotificationCharacteristic = null;
                 notificationSubscriptionAttempts = 0;
+                main.removeCallbacks(serviceDiscoveryFallback);
+                resetDiscoveryGate();
                 setBle("連線中斷");
                 AppLog.w("BLE", "GATT disconnected status=" + status + describeGattStatus(status));
                 commandQueue.cancel();
@@ -314,6 +325,14 @@ final class ReConnectionManager {
         }
 
         @Override public void onServicesDiscovered(BluetoothGatt current, int status) {
+            if (status == BluetoothGatt.GATT_SUCCESS && current.getServices().isEmpty()
+                    && GattDiscoveryGate.shouldRetryEmpty(emptyServiceDiscoveryRetries)) {
+                emptyServiceDiscoveryRetries++;
+                serviceDiscoveryStarted = false;
+                AppLog.w("BLE", "Service discovery returned empty; retrying after stabilization");
+                main.postDelayed(() -> startServiceDiscovery("empty service retry"), 1_500L);
+                return;
+            }
             if (status != BluetoothGatt.GATT_SUCCESS) { setBle("探索服務失敗"); return; }
             BluetoothGattService gc1 = current.getService(GC1_SERVICE);
             if (gc1 != null) {
@@ -451,13 +470,19 @@ final class ReConnectionManager {
         @Override public void onReceive(Context receiverContext, Intent intent) {
             BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
             if (device == null || gatt == null || !device.equals(gatt.getDevice())) return;
+            if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(intent.getAction())) {
+                aclConnectedSignal = true;
+                AppLog.i("BLE", "ACL connected signal received");
+                maybeStartServiceDiscovery();
+                return;
+            }
             int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
             int previous = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, BluetoothDevice.ERROR);
             AppLog.i("BLE", "Bond state " + previous + " -> " + state);
             if (state == BluetoothDevice.BOND_BONDED && pendingNotificationCharacteristic != null) {
                 pendingNotificationCharacteristic = null;
                 setP2p("BLE 配對完成，正在重建安全 GATT 連線…");
-                reconnectWithFreshGatt(device, "bond completed");
+                reconnectAfterBond(device);
             } else if (state == BluetoothDevice.BOND_NONE && previous == BluetoothDevice.BOND_BONDING) {
                 pendingNotificationCharacteristic = null;
                 setP2p("HTC RE BLE 配對失敗");
@@ -472,10 +497,6 @@ final class ReConnectionManager {
             int bondState = device.getBondState();
             AppLog.i("BLE", "A000 bond state=" + bondState);
             if (bondState == BluetoothDevice.BOND_BONDED) {
-                if (!freshGattForBond) {
-                    reconnectWithFreshGatt(device, "existing bond");
-                    return;
-                }
                 enableStatusNotifications(current, characteristic);
                 return;
             }
@@ -588,7 +609,7 @@ final class ReConnectionManager {
         }
     }
 
-    private void reconnectWithFreshGatt(BluetoothDevice device, String reason) {
+    private void reconnectAfterBond(BluetoothDevice device) {
         if (gattReplacementInProgress || device == null) return;
         BluetoothGatt oldGatt = gatt;
         if (oldGatt == null) return;
@@ -599,34 +620,49 @@ final class ReConnectionManager {
         commandQueue.cancel();
         clearGc1Characteristics();
         controlProfile = 0;
-        AppLog.i("BLE", "Replacing GATT after " + reason);
+        main.removeCallbacks(serviceDiscoveryFallback);
+        resetDiscoveryGate();
+        AppLog.i("BLE", "Reconnecting GATT after bond completion without cache refresh");
         try { oldGatt.disconnect(); } catch (SecurityException ignored) { }
         main.postDelayed(() -> {
-            boolean refreshed = refreshGattCache(oldGatt);
             try { oldGatt.close(); } catch (SecurityException ignored) { }
-            AppLog.i("BLE", "GATT cache refresh result=" + refreshed);
             try {
-                freshGattForBond = true;
                 gattReplacementInProgress = false;
                 setBle("正在重建安全連線");
-                gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE);
+                gatt = device.connectGatt(context, false, gattCallback);
             } catch (SecurityException error) {
-                freshGattForBond = false;
                 gattReplacementInProgress = false;
                 setBle("缺少藍牙連線權限");
             }
         }, 700L);
     }
 
-    private boolean refreshGattCache(BluetoothGatt target) {
-        try {
-            Method refresh = target.getClass().getMethod("refresh");
-            Object result = refresh.invoke(target);
-            return result instanceof Boolean && (Boolean) result;
-        } catch (Exception error) {
-            AppLog.w("BLE", "GATT cache refresh unavailable: " + error.getClass().getSimpleName());
-            return false;
+    private void maybeStartServiceDiscovery() {
+        if (GattDiscoveryGate.shouldDiscover(gattConnectedSignal, aclConnectedSignal,
+                serviceDiscoveryStarted)) {
+            main.removeCallbacks(serviceDiscoveryFallback);
+            main.postDelayed(() -> startServiceDiscovery("GATT + ACL synchronized"), 350L);
         }
+    }
+
+    private void startServiceDiscovery(String reason) {
+        BluetoothGatt current = gatt;
+        if (current == null || !reGattConnected || serviceDiscoveryStarted) return;
+        serviceDiscoveryStarted = true;
+        try {
+            boolean started = current.discoverServices();
+            AppLog.i("BLE", "Service discovery reason=" + reason + " started=" + started);
+            if (!started) serviceDiscoveryStarted = false;
+        } catch (SecurityException error) {
+            serviceDiscoveryStarted = false;
+        }
+    }
+
+    private void resetDiscoveryGate() {
+        gattConnectedSignal = false;
+        aclConnectedSignal = false;
+        serviceDiscoveryStarted = false;
+        emptyServiceDiscoveryRetries = 0;
     }
 
     private void startWifiBootstrapIfReady() {
