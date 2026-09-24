@@ -95,6 +95,7 @@ final class ReConnectionManager {
     private boolean serviceDiscoveryStarted;
     private int emptyServiceDiscoveryRetries;
     private int notificationSubscriptionAttempts;
+    private int multiplexSubscriptionAttempts;
     private String cameraIp;
     private String ble = "未連線";
     private String p2p = "未建立";
@@ -216,6 +217,7 @@ final class ReConnectionManager {
         resetDiscoveryGate();
         pendingNotificationCharacteristic = null;
         notificationSubscriptionAttempts = 0;
+        multiplexSubscriptionAttempts = 0;
         if (gatt != null) {
             try { gatt.disconnect(); gatt.close(); } catch (SecurityException ignored) { }
             gatt = null;
@@ -313,6 +315,7 @@ final class ReConnectionManager {
                 controlProfile = 0;
                 pendingNotificationCharacteristic = null;
                 notificationSubscriptionAttempts = 0;
+                multiplexSubscriptionAttempts = 0;
                 main.removeCallbacks(serviceDiscoveryFallback);
                 resetDiscoveryGate();
                 setBle("連線中斷");
@@ -377,13 +380,28 @@ final class ReConnectionManager {
                     || GC1_NOTIFY_SECONDARY.equals(source))) {
                 AppLog.i("BLE", "GC1 multiplex CCCD status=" + status + " characteristic=" + source);
                 if (status != BluetoothGatt.GATT_SUCCESS) {
+                    if (GattSubscriptionPolicy.shouldRetryMultiplex(status,
+                            multiplexSubscriptionAttempts)) {
+                        int nextAttempt = multiplexSubscriptionAttempts + 1;
+                        AppLog.w("BLE", "GC1 multiplex retry scheduled characteristic=" + source
+                                + " status=" + status + " nextAttempt=" + nextAttempt);
+                        BluetoothGattCharacteristic retryCharacteristic = GC1_NOTIFY_PRIMARY.equals(source)
+                                ? gc1NotifyPrimary : gc1NotifySecondary;
+                        String retryLabel = GC1_NOTIFY_PRIMARY.equals(source) ? "AE01" : "AE02";
+                        main.postDelayed(() -> writeNotificationDescriptor(current,
+                                retryCharacteristic, retryLabel), 2_000L);
+                        return;
+                    }
                     setP2p("無法訂閱 RE multiplex 通道（status=" + status + "）");
                     return;
                 }
                 if (GC1_NOTIFY_PRIMARY.equals(source)) {
-                    writeNotificationDescriptor(current, gc1NotifySecondary, "AE02");
+                    multiplexSubscriptionAttempts = 0;
+                    main.postDelayed(() -> writeNotificationDescriptor(current,
+                            gc1NotifySecondary, "AE02"), 2_000L);
                     return;
                 }
+                multiplexSubscriptionAttempts = 0;
                 notificationsReady = true;
                 AppLog.i("BLE", "GC1 AE01/AE02 multiplex notifications ready");
                 setP2p("RE 控制通道已就緒");
@@ -522,7 +540,9 @@ final class ReConnectionManager {
             }
             if (!GattSubscriptionPolicy.requiresDescriptorWrite(controlProfile)) {
                 AppLog.i("BLE", "A000 local notification registration ready; A304 CCCD write skipped");
-                writeNotificationDescriptor(current, gc1NotifyPrimary, "AE01");
+                multiplexSubscriptionAttempts = 0;
+                main.postDelayed(() -> writeNotificationDescriptor(current,
+                        gc1NotifyPrimary, "AE01"), 1_500L);
                 return;
             }
             int properties = notificationCharacteristic.getProperties();
@@ -553,6 +573,7 @@ final class ReConnectionManager {
 
     private void writeNotificationDescriptor(BluetoothGatt current,
             BluetoothGattCharacteristic characteristic, String label) {
+        if (current == null || current != gatt || !reGattConnected) return;
         if (characteristic == null) {
             setP2p("找不到 RE " + label + " multiplex 通道");
             return;
@@ -568,8 +589,9 @@ final class ReConnectionManager {
                 return;
             }
             byte[] value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE;
+            multiplexSubscriptionAttempts++;
             AppLog.i("BLE", "Subscribing GC1 multiplex " + label + " properties="
-                    + characteristic.getProperties());
+                    + characteristic.getProperties() + " attempt=" + multiplexSubscriptionAttempts);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 int result = current.writeDescriptor(descriptor, value);
                 if (result != android.bluetooth.BluetoothStatusCodes.SUCCESS) {

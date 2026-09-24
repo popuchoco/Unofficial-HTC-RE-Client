@@ -19,4 +19,11 @@ public class GattSubscriptionPolicyTest {
         assertFalse(GattSubscriptionPolicy.requiresDescriptorWrite(1));
         assertTrue(GattSubscriptionPolicy.requiresDescriptorWrite(2));
     }
+
+    @Test public void retriesMultiplexDescriptorFailuresUpToTenAttempts() {
+        assertTrue(GattSubscriptionPolicy.shouldRetryMultiplex(11, 1));
+        assertTrue(GattSubscriptionPolicy.shouldRetryMultiplex(11, 9));
+        assertFalse(GattSubscriptionPolicy.shouldRetryMultiplex(11, 10));
+        assertFalse(GattSubscriptionPolicy.shouldRetryMultiplex(0, 1));
+    }
 }
