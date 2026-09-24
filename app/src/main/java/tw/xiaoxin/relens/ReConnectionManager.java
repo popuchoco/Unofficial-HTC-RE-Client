@@ -89,7 +89,6 @@ final class ReConnectionManager {
     private BluetoothGattCharacteristic gc1PhoneResult;
     private BluetoothGattCharacteristic gc1NotifyPrimary;
     private BluetoothGattCharacteristic gc1NotifySecondary;
-    private final Gc1LongValueCodec.Collector gc1ResultCollector = new Gc1LongValueCodec.Collector();
     private int controlProfile;
     private BluetoothGattCharacteristic pendingNotificationCharacteristic;
     private WifiP2pGroup pendingGroup;
@@ -965,14 +964,16 @@ final class ReConnectionManager {
         int frequency = Build.VERSION.SDK_INT >= 29 ? pendingGroup.getFrequency() : 0;
         List<GattCommandQueue.Packet> writes = new ArrayList<>();
         if (controlProfile == 1) {
-            String country = normalizedCountry(Locale.getDefault().getCountry());
-            writes.add(new GattCommandQueue.Packet(GC1_SERVER_BAND,
-                    new byte[]{1, 0, (byte) country.charAt(1), (byte) country.charAt(0)}, "設定 RE 國別與頻段"));
-            addGc1LongPackets(writes, GC1_PHONE_SSID, ssid.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi SSID");
-            addGc1LongPackets(writes, GC1_PHONE_PASSWORD, passphrase.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi 密碼");
-            int transaction = ((int) (System.nanoTime() & 0x0f) << 4) | 1;
+            addGc1LongPackets(writes, GC1_PHONE_SSID, WIFI_SET_SSID_REQUEST,
+                    ssid.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi SSID");
+            addGc1LongPackets(writes, GC1_PHONE_PASSWORD, WIFI_SET_PASSWORD_REQUEST,
+                    passphrase.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi 密碼");
+            byte[] config = makeStationConfig(frequency, Locale.getDefault().getCountry());
+            byte[] command = new byte[config.length + 1];
+            command[0] = WIFI_CONFIG_REQUEST;
+            System.arraycopy(config, 0, command, 1, config.length);
             writes.add(new GattCommandQueue.Packet(GC1_PHONE_CONFIG,
-                    new byte[]{(byte) transaction, 4, 1}, "設定 station 模式並加入群組"));
+                    command, "設定 station 模式並加入群組"));
         } else {
             byte[] config = makeStationConfig(frequency, Locale.getDefault().getCountry());
             writes.addAll(GattCommandQueue.longCommand(LONG_COMMAND, WIFI_SET_SSID_REQUEST,
@@ -1056,9 +1057,7 @@ final class ReConnectionManager {
 
     private void handleStatusNotification(UUID characteristicId, byte[] value) {
         if (controlProfile == 1 && GC1_PHONE_RESULT.equals(characteristicId)) {
-            value = gc1ResultCollector.add(value);
-            if (value == null) return;
-            finishWifiConfig(value, 1);
+            finishWifiConfig(value, 0);
             return;
         }
         if (value == null || value.length < 2 || value[0] != WIFI_CONFIG_STATUS_EVENT) return;
@@ -1085,8 +1084,8 @@ final class ReConnectionManager {
     }
 
     private void addGc1LongPackets(List<GattCommandQueue.Packet> writes, UUID characteristic,
-            byte[] payload, String label) {
-        for (byte[] packet : Gc1LongValueCodec.fragment(payload)) {
+            byte commandId, byte[] payload, String label) {
+        for (byte[] packet : Gc1LongValueCodec.fragment(commandId, payload)) {
             writes.add(new GattCommandQueue.Packet(characteristic, packet, label));
         }
     }
@@ -1134,7 +1133,6 @@ final class ReConnectionManager {
         gc1PhoneResult = null;
         gc1NotifyPrimary = null;
         gc1NotifySecondary = null;
-        gc1ResultCollector.reset();
     }
 
     private boolean hasBluetoothPermission(String permission) {
