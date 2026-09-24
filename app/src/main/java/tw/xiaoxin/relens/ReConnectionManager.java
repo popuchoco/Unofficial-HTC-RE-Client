@@ -106,6 +106,7 @@ final class ReConnectionManager {
     private String p2p = "未建立";
     private String http = "未連線";
     private String foundAddress;
+    private String cameraPassword = "";
 
     private final Runnable configTimeout = () -> {
         if (!awaitingConfigStatus) return;
@@ -145,6 +146,23 @@ final class ReConnectionManager {
     String httpState() { return http; }
     String foundAddress() { return foundAddress; }
     String cameraIp() { return cameraIp; }
+
+    void setCameraPassword(String password) {
+        cameraPassword = password == null ? "" : password;
+    }
+
+    boolean retryPasswordVerification(String password) {
+        setCameraPassword(password);
+        if (gatt == null || !reGattConnected || gc1PasswordRequest == null
+                || gc1PasswordResult == null) {
+            setP2p("請先連線 HTC RE，再驗證相機密碼");
+            return false;
+        }
+        passwordHandshakeInFlight = true;
+        setP2p("正在驗證 RE 相機密碼");
+        writePasswordVerification(gatt, cameraPassword);
+        return true;
+    }
 
     boolean bluetoothOn() {
         BluetoothManager manager = context.getSystemService(BluetoothManager.class);
@@ -392,7 +410,7 @@ final class ReConnectionManager {
                     setP2p("無法啟用 RE 密碼驗證通道（status=" + status + "）");
                     return;
                 }
-                main.postDelayed(() -> writePasswordVerification(current, ""), 500L);
+                main.postDelayed(() -> writePasswordVerification(current, cameraPassword), 500L);
                 return;
             }
             if (controlProfile == 1 && (GC1_NOTIFY_PRIMARY.equals(source)
@@ -522,8 +540,9 @@ final class ReConnectionManager {
             byte[] value = characteristic.getValue();
             if (GC1_PASSWORD_RESULT.equals(id)) {
                 passwordHandshakeInFlight = false;
-                int result = value == null || value.length == 0 ? -1 : value[0] & 0xff;
-                AppLog.i("BLE", "A106 password verification result=" + result);
+                int result = RePasswordProtocol.verificationResult(value);
+                AppLog.i("BLE", "A106 password verification result=" + result
+                        + " length=" + (value == null ? 0 : value.length));
                 if (result == 0 || result == 2) {
                     pendingNotificationCharacteristic = null;
                     setP2p("RE 密碼驗證完成");
@@ -680,10 +699,7 @@ final class ReConnectionManager {
 
     private void writePasswordVerification(BluetoothGatt current, String password) {
         if (current == null || current != gatt || !reGattConnected || gc1PasswordRequest == null) return;
-        byte[] text = password.getBytes(StandardCharsets.US_ASCII);
-        byte[] payload = new byte[text.length + 1];
-        payload[0] = 0;
-        System.arraycopy(text, 0, payload, 1, text.length);
+        byte[] payload = RePasswordProtocol.verificationPayload(password);
         AppLog.i("BLE", "Writing A105 password verification length=" + payload.length);
         if (!writeGattPacket(GC1_PASSWORD_REQUEST, payload)) {
             passwordHandshakeInFlight = false;
