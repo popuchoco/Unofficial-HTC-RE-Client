@@ -24,9 +24,13 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import java.nio.charset.StandardCharsets;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -53,7 +57,8 @@ final class ReConnectionManager {
     private static final byte WIFI_SET_SSID_REQUEST = 0x22;
     private static final byte WIFI_SET_PASSWORD_REQUEST = 0x23;
     private static final byte WIFI_CONFIG_STATUS_EVENT = 0x26;
-    private static final long BOOT_TIMEOUT_MS = 10_000L;
+    private static final long BOOT_TIMEOUT_MS = 3_000L;
+    private static final int BOOT_MAX_ATTEMPTS = 5;
     private static final long CONFIG_TIMEOUT_MS = 60_000L;
     private static final int GROUP_INFO_MAX_ATTEMPTS = 12;
     private static final long GROUP_INFO_RETRY_MS = 750L;
@@ -73,6 +78,7 @@ final class ReConnectionManager {
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
+    private final Random random = new Random();
     private final GattCommandQueue commandQueue;
     private BluetoothLeScanner scanner;
     private ScanCallback scanCallback;
@@ -106,6 +112,7 @@ final class ReConnectionManager {
     private int pendingPasswordResult = -1;
     private String pendingNewPassword;
     private boolean bootWakeInFlight;
+    private int bootWakeAttempts;
     private boolean bootPreparationComplete;
     private boolean gattConnectedSignal;
     private boolean aclConnectedSignal;
@@ -119,6 +126,7 @@ final class ReConnectionManager {
     private String http = "未連線";
     private String foundAddress;
     private String cameraPassword = "";
+    private volatile DatagramSocket ipDiscoverySocket;
 
     private final Runnable configTimeout = () -> {
         if (!awaitingConfigStatus) return;
@@ -129,8 +137,14 @@ final class ReConnectionManager {
     private final Runnable bootTimeout = () -> {
         if (!bootWakeInFlight || bootPreparationComplete) return;
         bootWakeInFlight = false;
-        setP2p("RE Linux 啟動回覆逾時，請重新連線再試");
-        AppLog.w("BLE", "POWER_ON_STATUS_EVENT timeout");
+        if (bootWakeAttempts < BOOT_MAX_ATTEMPTS) {
+            AppLog.w("BLE", "A101 ready timeout; retrying wake attempt="
+                    + (bootWakeAttempts + 1));
+            writeGc1WakeCommand(gatt);
+            return;
+        }
+        setP2p("RE 啟動回覆逾時，請重新連線再試");
+        AppLog.w("BLE", "A101 ready timeout after attempts=" + bootWakeAttempts);
     };
     private final Runnable serviceDiscoveryFallback = () -> startServiceDiscovery("ACL fallback");
 
@@ -148,6 +162,7 @@ final class ReConnectionManager {
                 setP2p("設定已送出，等待 RE 回報 IP");
                 main.removeCallbacks(configTimeout);
                 main.postDelayed(configTimeout, CONFIG_TIMEOUT_MS);
+                if (controlProfile == 1) startGc1IpDiscovery();
             }
             @Override public void onError(String message) {
                 awaitingConfigStatus = false;
@@ -588,6 +603,14 @@ final class ReConnectionManager {
                 }
                 if (bootPreparationComplete) return;
                 AppLog.i("BLE", "RE wake command accepted; waiting for A101 ready event=17");
+                try {
+                    AppLog.i("BLE", "Reading back A107 wake echo");
+                    if (!current.readCharacteristic(gc1BootCommand)) {
+                        AppLog.w("BLE", "Android rejected A107 read-back");
+                    }
+                } catch (SecurityException error) {
+                    AppLog.w("BLE", "A107 read-back permission denied");
+                }
                 main.removeCallbacks(bootTimeout);
                 main.postDelayed(bootTimeout, BOOT_TIMEOUT_MS);
                 return;
@@ -597,6 +620,13 @@ final class ReConnectionManager {
 
         @Override public void onCharacteristicRead(BluetoothGatt current,
                 BluetoothGattCharacteristic characteristic, int status) {
+            if (GC1_BOOT_COMMAND.equals(characteristic.getUuid())) {
+                byte[] echo = characteristic.getValue();
+                AppLog.i("BLE", "A107 wake echo status=" + status + " length="
+                        + (echo == null ? 0 : echo.length) + " first="
+                        + (echo == null || echo.length == 0 ? -1 : echo[0] & 0xff));
+                return;
+            }
             if (!GC1_BOOT_READY.equals(characteristic.getUuid())) return;
             bootReadInFlight = false;
             if (securityProbeInFlight) {
@@ -977,14 +1007,14 @@ final class ReConnectionManager {
         int frequency = Build.VERSION.SDK_INT >= 29 ? pendingGroup.getFrequency() : 0;
         List<GattCommandQueue.Packet> writes = new ArrayList<>();
         if (controlProfile == 1) {
-            addGc1LongPackets(writes, GC1_PHONE_SSID, WIFI_SET_SSID_REQUEST,
+            writes.add(new GattCommandQueue.Packet(GC1_SERVER_BAND,
+                    Gc1WifiProtocol.serverBand(Locale.getDefault().getCountry()),
+                    "設定第一代 RE Wi-Fi 國別"));
+            addGc1LongPackets(writes, GC1_PHONE_SSID,
                     ssid.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi SSID");
-            addGc1LongPackets(writes, GC1_PHONE_PASSWORD, WIFI_SET_PASSWORD_REQUEST,
+            addGc1LongPackets(writes, GC1_PHONE_PASSWORD,
                     passphrase.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi 密碼");
-            byte[] config = makeStationConfig(frequency, Locale.getDefault().getCountry());
-            byte[] command = new byte[config.length + 1];
-            command[0] = WIFI_CONFIG_REQUEST;
-            System.arraycopy(config, 0, command, 1, config.length);
+            byte[] command = Gc1WifiProtocol.stationConfig(random.nextInt(), false);
             writes.add(new GattCommandQueue.Packet(GC1_PHONE_CONFIG,
                     command, "設定 station 模式並加入群組"));
         } else {
@@ -1020,9 +1050,11 @@ final class ReConnectionManager {
     private void writeGc1WakeCommand(BluetoothGatt current) {
         if (bootWakeInFlight || gc1BootCommand == null) return;
         bootWakeInFlight = true;
+        bootWakeAttempts++;
         setP2p("RE 處於待機，正在喚醒");
         byte[] command = new byte[]{0x01};
-        AppLog.i("BLE", "Sending A107 first-generation wake value=1");
+        AppLog.i("BLE", "Sending A107 first-generation wake value=1 attempt="
+                + bootWakeAttempts);
         if (!writeGattPacket(GC1_BOOT_COMMAND, command)) {
             bootWakeInFlight = false;
             setP2p("Android 未接受 RE 喚醒命令");
@@ -1075,6 +1107,7 @@ final class ReConnectionManager {
             if (Gc1BootState.isReady(value)) {
                 main.removeCallbacks(bootTimeout);
                 bootWakeInFlight = false;
+                bootWakeAttempts = 0;
                 bootPreparationComplete = true;
                 AppLog.i("BLE", "RE A101 boot-ready bit received");
                 setP2p("RE 已啟動，正在傳送 Wi-Fi 設定");
@@ -1087,7 +1120,7 @@ final class ReConnectionManager {
             return;
         }
         if (controlProfile == 1 && GC1_PHONE_RESULT.equals(characteristicId)) {
-            finishWifiConfig(value, 0);
+            finishWifiConfig(value, 1);
             return;
         }
         if (value == null || value.length < 2 || value[0] != WIFI_CONFIG_STATUS_EVENT) return;
@@ -1096,10 +1129,11 @@ final class ReConnectionManager {
 
     private void finishWifiConfig(byte[] value, int statusIndex) {
         if (value.length <= statusIndex) return;
-        main.removeCallbacks(configTimeout);
-        awaitingConfigStatus = false;
         int status = value[statusIndex] & 0xff;
         if (status != 0) {
+            main.removeCallbacks(configTimeout);
+            awaitingConfigStatus = false;
+            closeGc1IpDiscovery();
             setP2p("RE 加入群組失敗（status=" + status + "）");
             return;
         }
@@ -1107,17 +1141,68 @@ final class ReConnectionManager {
         String ip = value.length >= ipIndex + 4
                 ? (value[ipIndex] & 0xff) + "." + (value[ipIndex + 1] & 0xff) + "." + (value[ipIndex + 2] & 0xff) + "." + (value[ipIndex + 3] & 0xff)
                 : "尚未提供";
-        if (!"尚未提供".equals(ip) && !"0.0.0.0".equals(ip)) cameraIp = ip;
+        if (value.length < ipIndex + 4 || "0.0.0.0".equals(ip)) {
+            AppLog.i("BLE", "A304 success without IP; continuing UDP 7777 wait");
+            return;
+        }
+        main.removeCallbacks(configTimeout);
+        awaitingConfigStatus = false;
+        closeGc1IpDiscovery();
+        cameraIp = ip;
         setP2p("RE 已加入 · IP " + ip);
         setHttpState("待連線 · " + ip);
         AppLog.i("BLE", "Wi-Fi bootstrap completed; camera IP=" + ip);
     }
 
+    private void startGc1IpDiscovery() {
+        closeGc1IpDiscovery();
+        Thread receiver = new Thread(() -> {
+            DatagramSocket socket = null;
+            try {
+                socket = new DatagramSocket(7777);
+                ipDiscoverySocket = socket;
+                socket.setReuseAddress(true);
+                socket.setSoTimeout((int) CONFIG_TIMEOUT_MS);
+                AppLog.i("P2P", "Listening for first-generation RE IP on UDP 7777");
+                DatagramPacket packet = new DatagramPacket(new byte[1024], 1024);
+                socket.receive(packet);
+                String ip = packet.getAddress().getHostAddress();
+                AppLog.i("P2P", "UDP 7777 received RE IP=" + ip);
+                main.post(() -> finishGc1IpDiscovery(ip));
+            } catch (SocketTimeoutException timeout) {
+                AppLog.w("P2P", "UDP 7777 RE IP discovery timeout");
+            } catch (Exception error) {
+                if (awaitingConfigStatus) {
+                    AppLog.w("P2P", "UDP 7777 RE IP discovery failed="
+                            + error.getClass().getSimpleName());
+                }
+            } finally {
+                if (socket != null && !socket.isClosed()) socket.close();
+                if (ipDiscoverySocket == socket) ipDiscoverySocket = null;
+            }
+        }, "re-ip-discovery");
+        receiver.setDaemon(true);
+        receiver.start();
+    }
+
+    private void finishGc1IpDiscovery(String ip) {
+        if (ip == null || ip.isEmpty()) return;
+        main.removeCallbacks(configTimeout);
+        awaitingConfigStatus = false;
+        cameraIp = ip;
+        setP2p("RE 已連線，IP " + ip);
+        setHttpState("等待連線至 " + ip);
+    }
+
+    private void closeGc1IpDiscovery() {
+        DatagramSocket socket = ipDiscoverySocket;
+        ipDiscoverySocket = null;
+        if (socket != null && !socket.isClosed()) socket.close();
+    }
+
     private void addGc1LongPackets(List<GattCommandQueue.Packet> writes, UUID characteristic,
-            byte commandId, byte[] payload, String label) {
-        for (byte[] packet : Gc1LongValueCodec.fragment(commandId, payload)) {
-            writes.add(new GattCommandQueue.Packet(characteristic, packet, label));
-        }
+            byte[] payload, String label) {
+        writes.addAll(Gc1LongValueCodec.fragment(characteristic, payload, label));
     }
 
     private String normalizedCountry(String country) {
@@ -1147,11 +1232,13 @@ final class ReConnectionManager {
     }
 
     private void clearGc1Characteristics() {
+        closeGc1IpDiscovery();
         main.removeCallbacks(bootTimeout);
         bootReadInFlight = false;
         securityProbeInFlight = false;
         resetPasswordOperation();
         bootWakeInFlight = false;
+        bootWakeAttempts = 0;
         bootPreparationComplete = false;
         gc1BootReady = null;
         gc1BootCommand = null;
