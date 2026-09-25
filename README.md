@@ -4,7 +4,7 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前修正版：`0.4.12`。第一代 RE 連線會先經由 `A106/A105` 完成相機密碼驗證；連線頁支援既有密碼驗證，以及硬體重設後依序確認原廠狀態、設定並重新驗證新密碼。Wi‑Fi bootstrap 使用 A000 控制協議的命令 ID、長值分段與完整 10-byte station config。密碼只保留於本次 App 執行期間。
+> 目前修正版：`0.4.13`。第一代 RE 連線會先經由 `A106/A105` 完成相機密碼驗證；連線頁支援既有密碼驗證，以及硬體重設後依序確認原廠狀態、設定並重新驗證新密碼。連線層會送出完整 Linux 啟動命令並等待啟動狀態事件，再依序傳送 Wi‑Fi bootstrap 的命令 ID、長值分段與完整 10-byte station config。密碼只保留於本次 App 執行期間。
 
 Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGroup()` 後會等待 owner group 的 SSID 與密碼真正可用，才啟動 BLE bootstrap。
 

@@ -53,6 +53,10 @@ final class ReConnectionManager {
     private static final byte WIFI_SET_SSID_REQUEST = 0x22;
     private static final byte WIFI_SET_PASSWORD_REQUEST = 0x23;
     private static final byte WIFI_CONFIG_STATUS_EVENT = 0x26;
+    private static final byte POWER_ON_REQUEST = 0x11;
+    private static final byte POWER_ON_LINUX = 0x01;
+    private static final byte POWER_ON_STATUS_READY = 0x01;
+    private static final long BOOT_TIMEOUT_MS = 10_000L;
     private static final long CONFIG_TIMEOUT_MS = 60_000L;
     private static final int GROUP_INFO_MAX_ATTEMPTS = 12;
     private static final long GROUP_INFO_RETRY_MS = 750L;
@@ -124,6 +128,12 @@ final class ReConnectionManager {
         awaitingConfigStatus = false;
         setP2p("RE 加入逾時，請重試");
         AppLog.w("BLE", "Wi-Fi config status timeout");
+    };
+    private final Runnable bootTimeout = () -> {
+        if (!bootWakeInFlight || bootPreparationComplete) return;
+        bootWakeInFlight = false;
+        setP2p("RE Linux 啟動回覆逾時，請重新連線再試");
+        AppLog.w("BLE", "POWER_ON_STATUS_EVENT timeout");
     };
     private final Runnable serviceDiscoveryFallback = () -> startServiceDiscovery("ACL fallback");
 
@@ -571,16 +581,18 @@ final class ReConnectionManager {
                 }
                 return;
             }
-            if (bootWakeInFlight && GC1_BOOT_COMMAND.equals(characteristic.getUuid())) {
-                bootWakeInFlight = false;
+            if (GC1_BOOT_COMMAND.equals(characteristic.getUuid())) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
+                    bootWakeInFlight = false;
+                    main.removeCallbacks(bootTimeout);
                     setP2p("喚醒 RE 失敗（status=" + status + "）");
                     AppLog.w("BLE", "Boot wake write failed status=" + status);
                     return;
                 }
-                bootPreparationComplete = true;
-                AppLog.i("BLE", "RE wake command accepted; waiting before Wi-Fi bootstrap");
-                main.postDelayed(ReConnectionManager.this::startWifiBootstrapIfReady, 1500L);
+                if (bootPreparationComplete) return;
+                AppLog.i("BLE", "RE Linux wake command accepted; waiting for event=18");
+                main.removeCallbacks(bootTimeout);
+                main.postDelayed(bootTimeout, BOOT_TIMEOUT_MS);
                 return;
             }
             commandQueue.onCharacteristicWrite(characteristic.getUuid(), status);
@@ -640,7 +652,7 @@ final class ReConnectionManager {
                 return;
             }
             if ((GC1_NOTIFY_PRIMARY.equals(id) || GC1_NOTIFY_SECONDARY.equals(id))
-                    && value != null && value.length > 1) {
+                    && value != null && value.length > 0) {
                 UUID mapped = gc1EventCharacteristic(value[0]);
                 if (mapped != null) {
                     byte[] payload = new byte[value.length - 1];
@@ -648,6 +660,9 @@ final class ReConnectionManager {
                     AppLog.i("BLE", "GC1 multiplex event=" + (value[0] & 0xff)
                             + " mapped=" + mapped + " length=" + payload.length);
                     handleStatusNotification(mapped, payload);
+                } else {
+                    AppLog.i("BLE", "GC1 multiplex event=" + (value[0] & 0xff)
+                            + " unmapped length=" + (value.length - 1));
                 }
                 return;
             }
@@ -1008,7 +1023,9 @@ final class ReConnectionManager {
         if (bootWakeInFlight || gc1BootCommand == null) return;
         bootWakeInFlight = true;
         setP2p("RE 處於待機，正在喚醒");
-        if (!writeGattPacket(GC1_BOOT_COMMAND, new byte[]{1})) {
+        byte[] command = new byte[]{POWER_ON_REQUEST, 0x01, POWER_ON_LINUX};
+        AppLog.i("BLE", "Sending POWER_ON_REQUEST for Linux");
+        if (!writeGattPacket(GC1_BOOT_COMMAND, command)) {
             bootWakeInFlight = false;
             setP2p("Android 未接受 RE 喚醒命令");
         }
@@ -1056,6 +1073,21 @@ final class ReConnectionManager {
     }
 
     private void handleStatusNotification(UUID characteristicId, byte[] value) {
+        if (controlProfile == 1 && GC1_BOOT_READY.equals(characteristicId)) {
+            if (value != null && value.length >= 2
+                    && value[0] == POWER_ON_LINUX && value[1] == POWER_ON_STATUS_READY) {
+                main.removeCallbacks(bootTimeout);
+                bootWakeInFlight = false;
+                bootPreparationComplete = true;
+                AppLog.i("BLE", "RE Linux boot status ready");
+                setP2p("RE 已啟動，正在傳送 Wi-Fi 設定");
+                startWifiBootstrapIfReady();
+            } else {
+                AppLog.w("BLE", "Unexpected POWER_ON_STATUS_EVENT length="
+                        + (value == null ? 0 : value.length));
+            }
+            return;
+        }
         if (controlProfile == 1 && GC1_PHONE_RESULT.equals(characteristicId)) {
             finishWifiConfig(value, 0);
             return;
@@ -1117,6 +1149,7 @@ final class ReConnectionManager {
     }
 
     private void clearGc1Characteristics() {
+        main.removeCallbacks(bootTimeout);
         bootReadInFlight = false;
         securityProbeInFlight = false;
         resetPasswordOperation();

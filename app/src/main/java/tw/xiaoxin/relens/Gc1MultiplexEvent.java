@@ -9,8 +9,8 @@ final class Gc1MultiplexEvent {
 
     static int target(byte eventId) {
         int id = eventId & 0xff;
-        if (id == 0x11) return BOOT_READY;
-        if (id == 0x34) return PHONE_WIFI_RESULT;
+        if (id == 0x12) return BOOT_READY;
+        if (id == 0x26) return PHONE_WIFI_RESULT;
         return UNKNOWN;
     }
 }
