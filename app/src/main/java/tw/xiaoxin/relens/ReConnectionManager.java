@@ -83,6 +83,7 @@ final class ReConnectionManager {
     private final GattCommandQueue commandQueue;
     private BluetoothLeScanner scanner;
     private ScanCallback scanCallback;
+    private Runnable scanTimeout;
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic shortCommand;
     private BluetoothGattCharacteristic longCommand;
@@ -259,10 +260,29 @@ final class ReConnectionManager {
                 for (Listener listener : listeners) listener.onFound(name, foundAddress);
                 stopScan();
             }
+
+            @Override public void onScanFailed(int errorCode) {
+                if (scanCallback != this) return;
+                if (scanTimeout != null) main.removeCallbacks(scanTimeout);
+                scanTimeout = null;
+                scanCallback = null;
+                String reason = describeScanFailure(errorCode);
+                AppLog.w("BLE", "Scan failed errorCode=" + errorCode + " reason=" + reason);
+                setBle("掃描失敗（" + reason + "）");
+            }
         };
-        try { scanner.startScan(scanCallback); }
+        ScanCallback activeScan = scanCallback;
+        try {
+            scanner.startScan(activeScan);
+            AppLog.i("BLE", "Scan started");
+        }
         catch (SecurityException error) { setBle("缺少藍牙掃描權限"); return; }
-        main.postDelayed(this::stopScan, 10_000L);
+        scanTimeout = () -> {
+            if (scanCallback != activeScan) return;
+            AppLog.i("BLE", "Scan timeout");
+            stopScan();
+        };
+        main.postDelayed(scanTimeout, 10_000L);
     }
 
     void connectFound() {
@@ -1269,7 +1289,21 @@ final class ReConnectionManager {
         return "";
     }
 
+    private String describeScanFailure(int errorCode) {
+        switch (errorCode) {
+            case 1: return "already started";
+            case 2: return "application registration failed";
+            case 3: return "internal error";
+            case 4: return "feature unsupported";
+            case 5: return "out of hardware resources";
+            case 6: return "scanning too frequently";
+            default: return "unknown error " + errorCode;
+        }
+    }
+
     private void stopScan() {
+        if (scanTimeout != null) main.removeCallbacks(scanTimeout);
+        scanTimeout = null;
         try {
             if (hasBluetoothPermission(Manifest.permission.BLUETOOTH_SCAN) && scanner != null && scanCallback != null) {
                 scanner.stopScan(scanCallback);
