@@ -452,6 +452,11 @@ final class ReConnectionManager {
             BluetoothGattService gc1 = current.getService(GC1_SERVICE);
             if (gc1 != null) {
                 controlProfile = 1;
+                BluetoothGattService commandService = current.getService(RE_SERVICE);
+                if (commandService != null) {
+                    shortCommand = commandService.getCharacteristic(SHORT_COMMAND);
+                    longCommand = commandService.getCharacteristic(LONG_COMMAND);
+                }
                 gc1BootReady = gc1.getCharacteristic(GC1_BOOT_READY);
                 gc1BootCommand = gc1.getCharacteristic(GC1_BOOT_COMMAND);
                 gc1PasswordRequest = gc1.getCharacteristic(GC1_PASSWORD_REQUEST);
@@ -464,7 +469,7 @@ final class ReConnectionManager {
                 gc1NotifyPrimary = gc1.getCharacteristic(GC1_NOTIFY_PRIMARY);
                 gc1NotifySecondary = gc1.getCharacteristic(GC1_NOTIFY_SECONDARY);
                 if (!hasRequiredCharacteristics()) { setBle("RE 第一代控制通道不完整"); return; }
-                AppLog.i("BLE", "HTC RE control profile=A000");
+                AppLog.i("BLE", "HTC RE control profile=A000 authentication + 5678 commands");
                 ensureBondThenEnableNotifications(current, gc1PhoneResult);
                 return;
             }
@@ -581,7 +586,8 @@ final class ReConnectionManager {
                 }
                 return;
             }
-            if (GC1_BOOT_COMMAND.equals(characteristic.getUuid())) {
+            if (GC1_BOOT_COMMAND.equals(characteristic.getUuid())
+                    || (bootWakeInFlight && SHORT_COMMAND.equals(characteristic.getUuid()))) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     bootWakeInFlight = false;
                     main.removeCallbacks(bootTimeout);
@@ -666,6 +672,14 @@ final class ReConnectionManager {
                 }
                 return;
             }
+            if (SHORT_COMMAND.equals(id) && value != null && value.length > 0
+                    && value[0] == 0x12) {
+                byte[] payload = new byte[value.length - 1];
+                System.arraycopy(value, 1, payload, 0, payload.length);
+                AppLog.i("BLE", "CF01 event=18 length=" + payload.length);
+                handleStatusNotification(GC1_BOOT_READY, payload);
+                return;
+            }
             handleStatusNotification(id, value);
         }
     };
@@ -722,7 +736,8 @@ final class ReConnectionManager {
                 setP2p("無法啟用 RE 狀態通知");
                 return;
             }
-            if (!GattSubscriptionPolicy.requiresDescriptorWrite(controlProfile)) {
+            if (controlProfile == 1
+                    && GC1_PHONE_RESULT.equals(notificationCharacteristic.getUuid())) {
                 AppLog.i("BLE", "A000 local notification registration ready; A304 CCCD write skipped");
                 multiplexSubscriptionAttempts = 0;
                 main.postDelayed(() -> writeNotificationDescriptor(current,
@@ -868,7 +883,8 @@ final class ReConnectionManager {
     private void finishPasswordVerification(BluetoothGatt current, String message) {
         pendingNotificationCharacteristic = null;
         setP2p(message);
-        enableStatusNotifications(current, gc1PhoneResult);
+        AppLog.i("BLE", "Password accepted; switching control channel to 5678/CF01");
+        enableStatusNotifications(current, shortCommand);
     }
 
     private void resetPasswordOperation() {
@@ -967,7 +983,7 @@ final class ReConnectionManager {
     private void startWifiBootstrapIfReady() {
         if (pendingGroup == null || !notificationsReady || commandQueue.isBusy() || awaitingConfigStatus) return;
         if (controlProfile == 1 && !bootPreparationComplete) {
-            readGc1BootState();
+            writeGc1WakeCommand(gatt);
             return;
         }
         String ssid = pendingGroup.getNetworkName();
@@ -979,15 +995,15 @@ final class ReConnectionManager {
         int frequency = Build.VERSION.SDK_INT >= 29 ? pendingGroup.getFrequency() : 0;
         List<GattCommandQueue.Packet> writes = new ArrayList<>();
         if (controlProfile == 1) {
-            addGc1LongPackets(writes, GC1_PHONE_SSID, WIFI_SET_SSID_REQUEST,
+            addGc1LongPackets(writes, LONG_COMMAND, WIFI_SET_SSID_REQUEST,
                     ssid.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi SSID");
-            addGc1LongPackets(writes, GC1_PHONE_PASSWORD, WIFI_SET_PASSWORD_REQUEST,
+            addGc1LongPackets(writes, LONG_COMMAND, WIFI_SET_PASSWORD_REQUEST,
                     passphrase.getBytes(StandardCharsets.UTF_8), "傳送 Wi-Fi 密碼");
             byte[] config = makeStationConfig(frequency, Locale.getDefault().getCountry());
             byte[] command = new byte[config.length + 1];
             command[0] = WIFI_CONFIG_REQUEST;
             System.arraycopy(config, 0, command, 1, config.length);
-            writes.add(new GattCommandQueue.Packet(GC1_PHONE_CONFIG,
+            writes.add(new GattCommandQueue.Packet(SHORT_COMMAND,
                     command, "設定 station 模式並加入群組"));
         } else {
             byte[] config = makeStationConfig(frequency, Locale.getDefault().getCountry());
@@ -1025,7 +1041,7 @@ final class ReConnectionManager {
         setP2p("RE 處於待機，正在喚醒");
         byte[] command = new byte[]{POWER_ON_REQUEST, 0x01, POWER_ON_LINUX};
         AppLog.i("BLE", "Sending POWER_ON_REQUEST for Linux");
-        if (!writeGattPacket(GC1_BOOT_COMMAND, command)) {
+        if (!writeGattPacket(SHORT_COMMAND, command)) {
             bootWakeInFlight = false;
             setP2p("Android 未接受 RE 喚醒命令");
         }
@@ -1127,7 +1143,8 @@ final class ReConnectionManager {
     }
 
     private boolean hasRequiredCharacteristics() {
-        if (controlProfile == 1) return gc1BootReady != null && gc1BootCommand != null
+        if (controlProfile == 1) return shortCommand != null && longCommand != null
+                && gc1BootReady != null && gc1BootCommand != null
                 && gc1PasswordRequest != null && gc1PasswordResult != null
                 && gc1ServerBand != null && gc1PhoneSsid != null
                 && gc1PhonePassword != null && gc1PhoneConfig != null && gc1PhoneResult != null

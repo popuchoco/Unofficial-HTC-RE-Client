@@ -57,6 +57,13 @@ public class GattCommandQueueTest {
         assertEquals(0x04, packets.get(2).value[1]);
     }
 
+    @Test public void prependsCommandIdToLinuxBootRequest() {
+        GattCommandQueue.Packet packet = GattCommandQueue.shortCommand(
+                CHARACTERISTIC, (byte) 0x11, new byte[]{0x01, 0x01}, "boot");
+
+        assertArrayEquals(new byte[]{0x11, 0x01, 0x01}, packet.value);
+    }
+
     @Test public void failureIdentifiesPacketThatWasRejected() {
         String[] error = {null};
         GattCommandQueue queue = new GattCommandQueue((id, value) -> true,
