@@ -33,7 +33,7 @@ RE 的區域網路 HTTP 端點需要 cleartext，相機流量因此保留 `usesC
 
 首次使用時，手機先透過 BLE 與 RE 建立控制通道，再建立 Wi-Fi Direct group。App 將 group 的 SSID 與 passphrase 經 GATT 依序送給 RE，RE 以 station 模式加入並回報 IPv4；HTTP 下載與 RTSP 預覽再走此 IP 網路。
 
-詳細握手與佇列規則見 [BLE 與 Wi-Fi Direct 連線引導](docs/CONNECTION_BOOTSTRAP.md)。
+詳細握手與佇列規則見 [BLE 與 Wi-Fi Direct 連線引導](docs/CONNECTION_BOOTSTRAP.md)。目前連線層已暫停試誤式發版；下一版必須先符合 [A000 連線流程稽核](docs/A000_CONNECTION_FLOW_AUDIT.md) 的狀態、分支、追蹤與測試閘門。
 
 ## 文件
 
@@ -43,6 +43,7 @@ RE 的區域網路 HTTP 端點需要 cleartext，相機流量因此保留 `usesC
 - [Android 相容性](docs/ANDROID_COMPATIBILITY.md)
 - [通訊協議備註](docs/PROTOCOL_NOTES.md)
 - [BLE 與 Wi-Fi Direct 連線引導](docs/CONNECTION_BOOTSTRAP.md)
+- [A000 連線流程稽核](docs/A000_CONNECTION_FLOW_AUDIT.md)
 - [YouTube Live 第三階段](docs/YOUTUBE_LIVE.md)
 - [測試計畫](docs/TEST_PLAN.md)
 
