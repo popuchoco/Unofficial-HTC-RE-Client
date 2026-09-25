@@ -137,14 +137,9 @@ final class ReConnectionManager {
     private final Runnable bootTimeout = () -> {
         if (!bootWakeInFlight || bootPreparationComplete) return;
         bootWakeInFlight = false;
-        if (bootWakeAttempts < BOOT_MAX_ATTEMPTS) {
-            AppLog.w("BLE", "A101 ready timeout; retrying wake attempt="
-                    + (bootWakeAttempts + 1));
-            writeGc1WakeCommand(gatt);
-            return;
-        }
-        setP2p("RE 啟動回覆逾時，請重新連線再試");
-        AppLog.w("BLE", "A101 ready timeout after attempts=" + bootWakeAttempts);
+        AppLog.w("BLE", "A101 notification timeout; polling boot-ready after attempt="
+                + bootWakeAttempts);
+        readGc1BootState();
     };
     private final Runnable serviceDiscoveryFallback = () -> startServiceDiscovery("ACL fallback");
 
@@ -659,8 +654,16 @@ final class ReConnectionManager {
             AppLog.i("BLE", "A101 boot-ready=" + ready + " length="
                     + (value == null ? 0 : value.length));
             if (ready) {
+                main.removeCallbacks(bootTimeout);
+                bootWakeInFlight = false;
+                bootWakeAttempts = 0;
                 bootPreparationComplete = true;
                 main.postDelayed(ReConnectionManager.this::startWifiBootstrapIfReady, 1500L);
+                return;
+            }
+            if (bootWakeAttempts >= BOOT_MAX_ATTEMPTS) {
+                setP2p("RE 啟動回覆逾時，請重新連線再試");
+                AppLog.w("BLE", "A101 remained not ready after attempts=" + bootWakeAttempts);
                 return;
             }
             writeGc1WakeCommand(current);

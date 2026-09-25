@@ -4,7 +4,7 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前修正版：`0.4.16`。第一代 RE 使用 A000 控制服務：完成 A105/A106 密碼驗證與 AE01/AE02 事件訂閱後，App 會讀取 A101 狀態；待機時向 A107 寫入喚醒值、讀回 echo，並依裝置流程重試等待 A101 ready bit。Wi‑Fi bootstrap 使用第一代的 A201 國別設定、A301/A302 長度與 offset 分段、3-byte A303 station config，以及 A304／UDP 7777 雙路徑取得結果。連線頁支援既有密碼驗證，以及硬體重設後設定並重新驗證新密碼；密碼只保留於本次 App 執行期間。
+> 目前修正版：`0.4.17`。第一代 RE 使用 A000 控制服務：完成 A105/A106 密碼驗證與 AE01/AE02 事件訂閱後，App 會讀取 A101 狀態；待機時向 A107 寫入喚醒值、讀回 echo，等待通知逾時時主動重讀 A101 ready bit，再依裝置流程決定是否重試。Wi‑Fi bootstrap 使用第一代的 A201 國別設定、A301/A302 長度與 offset 分段、3-byte A303 station config，以及 A304／UDP 7777 雙路徑取得結果。連線頁支援既有密碼驗證，以及硬體重設後設定並重新驗證新密碼；密碼只保留於本次 App 執行期間。
 
 Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGroup()` 後會等待 owner group 的 SSID 與密碼真正可用，才啟動 BLE bootstrap。
 
