@@ -59,6 +59,7 @@ final class ReConnectionManager {
     private static final byte WIFI_CONFIG_STATUS_EVENT = 0x26;
     private static final long BOOT_TIMEOUT_MS = 3_000L;
     private static final int BOOT_MAX_ATTEMPTS = 5;
+    private static final long SERVICE_DISCOVERY_STABILIZATION_MS = 3_000L;
     private static final long CONFIG_TIMEOUT_MS = 60_000L;
     private static final int GROUP_INFO_MAX_ATTEMPTS = 12;
     private static final long GROUP_INFO_RETRY_MS = 750L;
@@ -652,7 +653,8 @@ final class ReConnectionManager {
             byte[] value = characteristic.getValue();
             boolean ready = Gc1BootState.isReady(value);
             AppLog.i("BLE", "A101 boot-ready=" + ready + " length="
-                    + (value == null ? 0 : value.length));
+                    + (value == null ? 0 : value.length) + " first="
+                    + (value == null || value.length == 0 ? -1 : value[0] & 0xff));
             if (ready) {
                 main.removeCallbacks(bootTimeout);
                 bootWakeInFlight = false;
@@ -971,7 +973,8 @@ final class ReConnectionManager {
         if (GattDiscoveryGate.shouldDiscover(gattConnectedSignal, aclConnectedSignal,
                 serviceDiscoveryStarted)) {
             main.removeCallbacks(serviceDiscoveryFallback);
-            main.postDelayed(() -> startServiceDiscovery("GATT + ACL synchronized"), 350L);
+            main.postDelayed(() -> startServiceDiscovery("GATT + ACL stabilized"),
+                    SERVICE_DISCOVERY_STABILIZATION_MS);
         }
     }
 
