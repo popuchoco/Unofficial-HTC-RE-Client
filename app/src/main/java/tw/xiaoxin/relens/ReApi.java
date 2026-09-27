@@ -17,26 +17,24 @@ final class ReApi {
     JSONObject capture() throws Exception { return gc1.capture(); }
     JSONObject startRecording() throws Exception { return gc1.startRecording(); }
     JSONObject stopRecording() throws Exception { return gc1.stopRecording(); }
-    JSONArray media() throws Exception {
-        JSONObject o = json("GET", "/v1/dcim/items?offset=0&count=200", null);
-        for (String key : new String[]{"items","dcim_items","result"}) if (o.optJSONArray(key) != null) return o.getJSONArray(key);
-        return new JSONArray();
-    }
+    JSONArray media() throws Exception { return gc1.media(); }
     JSONObject storage() throws Exception { return json("GET", "/v1/system/storage/freespace", null); }
     JSONObject serial() throws Exception { return json("GET", "/v1/system/serial_num", null); }
-    String downloadUrl(String id, String rendition) { return base + "/v1/dcim/items/" + enc(id) + "/" + rendition + "/download"; }
-    void download(String url, File target, Progress progress) throws Exception {
+    String startLiveView() throws Exception { return gc1.startLiveView(); }
+    void stopLiveView() throws Exception { gc1.stopLiveView(); }
+    void download(JSONObject item, File target, Progress progress) throws Exception {
         long existing = target.exists() ? target.length() : 0;
-        HttpURLConnection c = open(url, "GET");
-        if (existing > 0) c.setRequestProperty("Range", "bytes=" + existing + "-");
-        int status = c.getResponseCode();
-        if (status != 200 && status != 206) throw new IOException("HTTP " + status);
-        if (status == 200) existing = 0;
-        long total = existing + Math.max(0, c.getContentLengthLong());
-        try (InputStream in = c.getInputStream(); RandomAccessFile out = new RandomAccessFile(target, "rw")) {
-            out.seek(existing); byte[] buf = new byte[128 * 1024]; int n; long done = existing;
-            while ((n = in.read(buf)) >= 0) { out.write(buf, 0, n); done += n; progress.onProgress(done, total); }
-        } finally { c.disconnect(); }
+        long total = item.optLong("size", 0);
+        int handle = (int) item.getLong("handle");
+        try (RandomAccessFile file = new RandomAccessFile(target, "rw")) {
+            if (existing > total && total > 0) { file.setLength(0); existing = 0; }
+            file.seek(existing);
+            final RandomAccessFile destination = file;
+            gc1.download(handle, existing, total, new OutputStream() {
+                @Override public void write(int value) throws IOException { destination.write(value); }
+                @Override public void write(byte[] bytes, int offset, int length) throws IOException { destination.write(bytes, offset, length); }
+            }, progress::onProgress);
+        }
     }
     private JSONObject json(String method, String path, JSONObject body) throws Exception {
         HttpURLConnection c = open(base + path, method);

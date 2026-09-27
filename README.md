@@ -10,9 +10,9 @@ Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGrou
 
 - 「連線」頁位於最左側：BLE 掃描／連線、Wi-Fi Direct group、背景連線、斷線提醒及藍牙／Wi-Fi 狀態。
 - 連線層以序列 GATT 佇列傳送 Wi-Fi Direct SSID、密碼與 station/config；每一個封包都必須收到 characteristic callback 才會前進。
-- 解析 RE 的 Wi-Fi 設定狀態與相機 IPv4，供後續 HTTP、RTSP 使用。
-- A000／GC1 原生 socket 拍照、錄影與版本讀取；相簿與續傳仍保留獨立服務邊界。
-- 串流頁包含 RTSP 預覽基礎與 YouTube Live 控制面；RTSP→RTMP 媒體 relay 尚待完成。
+- 解析 RE 的 Wi-Fi 設定狀態與相機 IPv4，供 GC1 socket 與 RTSP 使用。
+- A000／GC1 原生 socket 拍照、錄影、版本讀取、相簿列舉及原檔續傳。
+- 拍攝頁內建 RTSP 即時預覽；串流頁保留 YouTube Live 控制面，RTSP→RTMP 媒體 relay 尚待完成。
 - 裝置資訊、深色／淺色／系統主題、偵錯 console 與操作 log 匯出。
 
 ## 平台設定
@@ -31,7 +31,7 @@ RE 的區域網路 HTTP 端點需要 cleartext，相機流量因此保留 `usesC
 
 ## 連線方式
 
-首次使用時，手機先透過 BLE 與 RE 建立控制通道，再建立 Wi-Fi Direct group。App 將 group 的 SSID 與 passphrase 經 GATT 依序送給 RE，RE 以 station 模式加入並回報 IPv4；HTTP 下載與 RTSP 預覽再走此 IP 網路。
+首次使用時，手機先透過 BLE 與 RE 建立控制通道，再建立 Wi-Fi Direct group。App 將 group 的 SSID 與 passphrase 經 GATT 依序送給 RE，RE 以 station 模式加入並回報 IPv4；GC1 控制、檔案下載與 RTSP 預覽再走此 IP 網路。
 
 詳細握手與佇列規則見 [BLE 與 Wi-Fi Direct 連線引導](docs/CONNECTION_BOOTSTRAP.md)。目前連線層已暫停試誤式發版；下一版必須先符合 [A000 連線流程稽核](docs/A000_CONNECTION_FLOW_AUDIT.md) 的狀態、分支、追蹤與測試閘門。
 

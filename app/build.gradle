@@ -8,8 +8,8 @@ android {
         minSdk 26
         // Android 12 Bluetooth permissions without target 33's Wi-Fi permission path.
         targetSdk 32
-        versionCode 35
-        versionName '0.4.22'
+        versionCode 36
+        versionName '0.5.0'
     }
     buildTypes {
         release { minifyEnabled false; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro' }
@@ -23,5 +23,9 @@ android {
 
 dependencies {
     implementation 'com.google.android.gms:play-services-auth:22.0.0'
+    // 1.9.x retains compileSdk 35 compatibility; targetSdk intentionally remains 32.
+    implementation 'androidx.media3:media3-exoplayer:1.9.4'
+    implementation 'androidx.media3:media3-exoplayer-rtsp:1.9.4'
+    implementation 'androidx.media3:media3-ui:1.9.4'
     testImplementation 'junit:junit:4.13.2'
 }

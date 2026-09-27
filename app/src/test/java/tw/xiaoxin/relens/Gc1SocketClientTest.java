@@ -30,4 +30,14 @@ public class Gc1SocketClientTest {
         assertEquals(0, data.getInt());
         assertEquals(0, data.remaining());
     }
+
+    @Test public void encodesAllMediaDescendingQuery() {
+        assertArrayEquals(new byte[]{0, 0, 0, (byte) 200, 0, 1},
+                Gc1SocketClient.encodeMediaQuery(0, 200));
+    }
+
+    @Test(expected=IllegalArgumentException.class)
+    public void rejectsEmptyMediaPage() {
+        Gc1SocketClient.encodeMediaQuery(0, 0);
+    }
 }

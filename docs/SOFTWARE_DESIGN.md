@@ -18,7 +18,7 @@
 Android UI → ConnectionCoordinator
                ├─ BLE transport ─────────────→ HTC RE
                ├─ Wi-Fi P2P / Network binding → HTC RE
-               └─ HTTP / RTSP ───────────────→ HTC RE
+               └─ GC1 socket / RTSP ─────────→ HTC RE
 ```
 
 ## 邏輯模組
@@ -31,9 +31,9 @@ Android UI → ConnectionCoordinator
 | P2pController | group 建立、廣播、group/connection info |
 | NetworkBinder | 取得 P2P `Network` 並綁定 socket |
 | ReApi | 依裝置世代選擇控制與媒體 API；目前 A000 使用 GC1 transport |
-| Gc1SocketClient | GC1 的 9000–9004 socket、501 握手、單工命令與事件追蹤 |
+| Gc1SocketClient | GC1 的 9000–9004 socket、501 握手、拍攝、相簿、分段下載、RTSP session 與事件追蹤 |
 | MediaRepository | 分頁、下載、續傳、驗證與 MediaStore |
-| StreamController | live view 與 RTSP 播放生命週期 |
+| Media3 ExoPlayer | 拍攝頁 live view、RTSP 解碼與畫面生命週期 |
 | DeviceRepository | 裝置資訊與儲存狀態 |
 | ConnectionMonitorService | 前景服務、背景狀態通知與斷線提醒 |
 | AppLog | 有界記憶體操作紀錄、敏感值遮蔽與 SAF 匯出 |

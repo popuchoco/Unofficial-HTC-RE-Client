@@ -1,6 +1,7 @@
 package tw.xiaoxin.relens;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.io.Closeable;
 import java.io.EOFException;
@@ -13,9 +14,14 @@ import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Locale;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.List;
 
 /** GC1/A000 native control transport. One command is in flight at a time. */
 final class Gc1SocketClient implements Closeable {
+    interface TransferProgress { void onProgress(long done, long total); }
     private static final int CONNECT_TIMEOUT_MS = 10_000;
     private static final int COMMAND_TIMEOUT_MS = 30_000;
     private static final byte[] CLIENT_GUID = {
@@ -66,6 +72,111 @@ final class Gc1SocketClient implements Closeable {
         ensureConnected();
         request(107, null);
         return ok("record_stop");
+    }
+
+    synchronized String startLiveView() throws Exception {
+        ensureConnected();
+        Response response = exchange(130, null);
+        ByteBuffer data = ByteBuffer.wrap(response.body).order(ByteOrder.LITTLE_ENDIAN);
+        requireSuccess(data, 130);
+        byte[] uri = new byte[data.remaining()];
+        data.get(uri);
+        String value = trimCString(uri);
+        if (!value.startsWith("rtsp://")) throw new IOException("GC1 未回傳有效 RTSP URI: " + value);
+        AppLog.i("GC1-RTSP", "Live view URI=" + value);
+        return value;
+    }
+
+    synchronized void stopLiveView() throws Exception {
+        if (handshake != null) request(131, null);
+    }
+
+    synchronized JSONArray media() throws Exception {
+        ensureConnected();
+        Response response = exchange(401, encodeMediaQuery(0, 200));
+        ByteBuffer data = ByteBuffer.wrap(response.body).order(ByteOrder.LITTLE_ENDIAN);
+        requireSuccess(data, 401);
+        if (data.remaining() % 9 != 0) throw new IOException("GC1 media list 長度異常: " + data.remaining());
+        List<MediaSummary> summaries = new ArrayList<>();
+        while (data.remaining() >= 9) {
+            int handle = data.getInt();
+            int time = data.getShort() & 0xffff;
+            int date = data.getShort() & 0xffff;
+            int type = data.get() & 0xff;
+            summaries.add(new MediaSummary(handle, fatTimeMillis(date, time), type));
+        }
+        Collections.sort(summaries, (a, b) -> Long.compare(b.createdAt, a.createdAt));
+        JSONArray result = new JSONArray();
+        for (MediaSummary summary : summaries) result.put(mediaDetail(summary));
+        AppLog.i("GC1-MEDIA", "Listed items=" + result.length());
+        return result;
+    }
+
+    synchronized void download(int handle, long offset, long total, OutputStream output,
+                               TransferProgress progress) throws Exception {
+        ensureConnected();
+        if (offset < 0 || offset > 0xffffffffL) throw new IOException("GC1 download offset 超出範圍");
+        ByteBuffer body = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(handle).putInt((int) offset);
+        int current = sequence++;
+        tx.write(encodeRequest(405, current, 0, body.array()));
+        tx.flush();
+        AppLog.i("GC1", "TX command=405 seq=" + current + " handle=" + handle + " offset=" + offset);
+        InputStream input = fileRx.getInputStream();
+        long done = offset;
+        Frame frame = readFrame(input, 405, current);
+        ByteBuffer payload = ByteBuffer.wrap(frame.body).order(ByteOrder.LITTLE_ENDIAN);
+        if (frame.flags == 0) {
+            requireSuccess(payload, 405);
+            byte[] bytes = new byte[payload.remaining()];
+            payload.get(bytes); output.write(bytes); done += bytes.length; progress.onProgress(done, total);
+        } else {
+          boolean first = true;
+          while (true) {
+            int fragmentOffset = payload.getInt();
+            int fragmentLength = payload.getInt();
+            if (fragmentOffset != done) throw new IOException("GC1 fragment offset 不連續: " + fragmentOffset + " != " + done);
+            if (first) { requireSuccess(payload, 405); fragmentLength--; first = false; }
+            if (fragmentLength < 0 || payload.remaining() != fragmentLength)
+                throw new IOException("GC1 fragment length 不符: " + fragmentLength + "/" + payload.remaining());
+            byte[] bytes = new byte[fragmentLength]; payload.get(bytes); output.write(bytes);
+            done += bytes.length; progress.onProgress(done, total);
+            if ((frame.flags & 0x04000000) != 0) throw new IOException("GC1 已取消下載");
+            if ((frame.flags & 0x02000000) == 0) break;
+            frame = readFrame(input, 405, current);
+            payload = ByteBuffer.wrap(frame.body).order(ByteOrder.LITTLE_ENDIAN);
+          }
+        }
+        output.flush();
+        AppLog.i("GC1-MEDIA", "Download completed handle=" + handle + " bytes=" + done);
+    }
+
+    private JSONObject mediaDetail(MediaSummary summary) throws Exception {
+        ByteBuffer request = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(summary.handle);
+        Response response = exchange(404, request.array());
+        ByteBuffer data = ByteBuffer.wrap(response.body).order(ByteOrder.LITTLE_ENDIAN);
+        requireSuccess(data, 404);
+        if (data.remaining() < 72) throw new IOException("GC1 media detail 長度異常: " + data.remaining());
+        int handle = data.getInt();
+        if (handle != summary.handle) throw new IOException("GC1 media handle 不符");
+        byte[] folderBytes = new byte[9], nameBytes = new byte[13], dateBytes = new byte[20];
+        data.get(folderBytes); data.get(nameBytes);
+        int type = data.get() & 0xff;
+        data.get(dateBytes);
+        long size = Integer.toUnsignedLong(data.getInt());
+        long duration = Integer.toUnsignedLong(data.getInt());
+        long extra1 = data.getLong(), extra2 = data.getLong();
+        int state = data.get() & 0xff;
+        String folder = trimCString(folderBytes), name = trimCString(nameBytes);
+        return new JSONObject()
+                .put("id", Integer.toUnsignedString(handle))
+                .put("handle", Integer.toUnsignedLong(handle))
+                .put("name", name)
+                .put("path", "/DCIM/" + folder + "/" + name)
+                .put("type", mediaType(type))
+                .put("created_at", trimCString(dateBytes))
+                .put("size", size).put("duration_ms", duration)
+                .put("extra_1", extra1).put("extra_2", extra2).put("state", state);
     }
 
     private JSONObject ok(String operation) throws Exception {
@@ -127,19 +238,20 @@ final class Gc1SocketClient implements Closeable {
         tx.flush();
         AppLog.i("GC1", String.format(Locale.ROOT, "TX command=%d seq=%d payload=%s", command, current, hex(body)));
 
-        byte[] headerBytes = readExact(rx, 16);
-        ByteBuffer header = ByteBuffer.wrap(headerBytes).order(ByteOrder.LITTLE_ENDIAN);
-        int responseCommand = header.getInt();
-        int length = header.getInt();
-        int responseSequence = header.getInt();
-        int flags = header.getInt();
-        if (responseCommand != command) throw new IOException("GC1 command 不符: expected=" + command + " actual=" + responseCommand);
-        if (responseSequence != current) throw new IOException("GC1 sequence 不符: expected=" + current + " actual=" + responseSequence);
-        if (length < 16 || length > 1_048_576) throw new IOException("GC1 response 長度異常: " + length);
-        byte[] responseBody = readExact(rx, length - 16);
+        Frame frame = readFrame(rx, command, current);
         AppLog.i("GC1", String.format(Locale.ROOT, "RX command=%d seq=%d flags=%08X payload=%s",
-                responseCommand, responseSequence, flags, hex(responseBody)));
-        return new Response(responseBody);
+                command, current, frame.flags, hex(frame.body)));
+        return new Response(frame.body);
+    }
+
+    private static Frame readFrame(InputStream input, int command, int sequence) throws IOException {
+        ByteBuffer header = ByteBuffer.wrap(readExact(input, 16)).order(ByteOrder.LITTLE_ENDIAN);
+        int responseCommand = header.getInt(), length = header.getInt();
+        int responseSequence = header.getInt(), flags = header.getInt();
+        if (responseCommand != command) throw new IOException("GC1 command 不符: expected=" + command + " actual=" + responseCommand);
+        if (responseSequence != sequence) throw new IOException("GC1 sequence 不符: expected=" + sequence + " actual=" + responseSequence);
+        if (length < 16 || length > 16 * 1024 * 1024) throw new IOException("GC1 response 長度異常: " + length);
+        return new Frame(flags, readExact(input, length - 16));
     }
 
     private static void requireSuccess(ByteBuffer body, int command) throws IOException {
@@ -192,6 +304,13 @@ final class Gc1SocketClient implements Closeable {
         return packet.array();
     }
 
+    static byte[] encodeMediaQuery(int offset, int count) {
+        if (offset < 0 || offset > 0xffff || count < 1 || count > 0xffff)
+            throw new IllegalArgumentException("media query range");
+        return ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN)
+                .put((byte) 0).putShort((short) offset).putShort((short) count).put((byte) 1).array();
+    }
+
     private static String hex(byte[] bytes) {
         if (bytes == null || bytes.length == 0) return "<empty>";
         StringBuilder out = new StringBuilder();
@@ -200,6 +319,28 @@ final class Gc1SocketClient implements Closeable {
             out.append(String.format(Locale.ROOT, "%02X", value & 0xff));
         }
         return out.toString();
+    }
+
+    private static String trimCString(byte[] bytes) {
+        int length = 0;
+        while (length < bytes.length && bytes[length] != 0) length++;
+        return new String(bytes, 0, length, java.nio.charset.StandardCharsets.UTF_8).trim();
+    }
+
+    private static String mediaType(int type) {
+        if (type == 0) return "photo";
+        if (type == 3) return "video";
+        if (type == 8) return "timelapse";
+        if (type == 9) return "slow_motion";
+        return "unknown_" + type;
+    }
+
+    private static long fatTimeMillis(int date, int time) {
+        Calendar calendar = Calendar.getInstance();
+        calendar.clear();
+        calendar.set(((date & 0xfe00) >> 9) + 1980, ((date & 0x01e0) >> 5) - 1,
+                date & 0x1f, (time & 0xf800) >> 11, (time & 0x07e0) >> 5, (time & 0x1f) * 2);
+        return calendar.getTimeInMillis();
     }
 
     @Override public synchronized void close() {
@@ -218,6 +359,18 @@ final class Gc1SocketClient implements Closeable {
     private static final class Response {
         final byte[] body;
         Response(byte[] body) { this.body = body; }
+    }
+
+    private static final class Frame {
+        final int flags; final byte[] body;
+        Frame(int flags, byte[] body) { this.flags = flags; this.body = body; }
+    }
+
+    private static final class MediaSummary {
+        final int handle, type; final long createdAt;
+        MediaSummary(int handle, long createdAt, int type) {
+            this.handle = handle; this.createdAt = createdAt; this.type = type;
+        }
     }
 
     private static final class Handshake {
