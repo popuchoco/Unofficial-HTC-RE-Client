@@ -11,7 +11,7 @@ Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGrou
 - 「連線」頁位於最左側：BLE 掃描／連線、Wi-Fi Direct group、背景連線、斷線提醒及藍牙／Wi-Fi 狀態。
 - 連線層以序列 GATT 佇列傳送 Wi-Fi Direct SSID、密碼與 station/config；每一個封包都必須收到 characteristic callback 才會前進。
 - 解析 RE 的 Wi-Fi 設定狀態與相機 IPv4，供後續 HTTP、RTSP 使用。
-- 拍照／錄影、相簿與 HTTP Range 續傳的介面及服務邊界。
+- A000／GC1 原生 socket 拍照、錄影與版本讀取；相簿與續傳仍保留獨立服務邊界。
 - 串流頁包含 RTSP 預覽基礎與 YouTube Live 控制面；RTSP→RTMP 媒體 relay 尚待完成。
 - 裝置資訊、深色／淺色／系統主題、偵錯 console 與操作 log 匯出。
 

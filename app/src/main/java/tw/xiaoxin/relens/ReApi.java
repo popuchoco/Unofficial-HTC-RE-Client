@@ -10,12 +10,13 @@ import java.util.*;
 final class ReApi {
     interface Progress { void onProgress(long done, long total); }
     private final String base;
-    ReApi(String host) { base = "http://" + host + ":3000"; }
+    private final Gc1SocketClient gc1;
+    ReApi(String host) { base = "http://" + host + ":3000"; gc1 = new Gc1SocketClient(host); }
     String baseUrl() { return base; }
-    JSONObject cameraInfo() throws Exception { return json("GET", "/v1/camera", null); }
-    JSONObject capture() throws Exception { return json("POST", "/v1/camera/capture", null); }
-    JSONObject startRecording() throws Exception { return json("POST", "/v1/camera/record/start", new JSONObject()); }
-    JSONObject stopRecording() throws Exception { return json("POST", "/v1/camera/record/stop", null); }
+    JSONObject cameraInfo() throws Exception { return gc1.cameraInfo(); }
+    JSONObject capture() throws Exception { return gc1.capture(); }
+    JSONObject startRecording() throws Exception { return gc1.startRecording(); }
+    JSONObject stopRecording() throws Exception { return gc1.stopRecording(); }
     JSONArray media() throws Exception {
         JSONObject o = json("GET", "/v1/dcim/items?offset=0&count=200", null);
         for (String key : new String[]{"items","dcim_items","result"}) if (o.optJSONArray(key) != null) return o.getJSONArray(key);

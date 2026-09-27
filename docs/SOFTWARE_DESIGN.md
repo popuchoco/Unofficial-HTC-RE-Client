@@ -30,7 +30,8 @@ Android UI → ConnectionCoordinator
 | BleTransport | 掃描、GATT 連線、讀寫與通知 |
 | P2pController | group 建立、廣播、group/connection info |
 | NetworkBinder | 取得 P2P `Network` 並綁定 socket |
-| ReApi | HTTP 控制及 JSON 解析 |
+| ReApi | 依裝置世代選擇控制與媒體 API；目前 A000 使用 GC1 transport |
+| Gc1SocketClient | GC1 的 9000–9004 socket、501 握手、單工命令與事件追蹤 |
 | MediaRepository | 分頁、下載、續傳、驗證與 MediaStore |
 | StreamController | live view 與 RTSP 播放生命週期 |
 | DeviceRepository | 裝置資訊與儲存狀態 |

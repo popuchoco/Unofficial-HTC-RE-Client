@@ -9,20 +9,22 @@
 - HTTP：控制請求、媒體清單及檔案下載。
 - RTSP：即時預覽；目前只保留介面。
 
-HTTP base URL 為 `http://<camera-ip>:3000`；RTSP URL 為 `rtsp://<camera-ip>/live`。手機端應將請求綁定至 Wi‑Fi Direct 所屬 Android `Network`，避免行動網路成為預設路由。
+## GC1 與 GC2 傳輸不可混用
 
-## HTTP 路徑
+A000／GC1 在取得相機 IP 後使用五條 TCP 通道：`9000` 命令送出、`9001` 命令回覆、`9002` 事件、`9003` 檔案、`9004` 縮圖。每個命令封包採 16-byte 小端序標頭（command、總長、sequence、flags），同一時間只允許一筆命令等待回覆。連線建立後必須先完成 command `501` 握手，才能送出拍照或錄影命令。
+
+`ws://<camera-ip>:3000/sock` 是 GC2 的控制路徑，不能套用到 A000／GC1。舊版文件所列 `http://<camera-ip>:3000/v1/...` REST 路徑未獲 GC1 實機證實，已自 GC1 實作移除。RTSP 與媒體下載端點仍須分別經實機確認。
+
+## 已確認的 GC1 控制命令
 
 | 功能 | 方法 | 路徑 | 狀態 |
 |---|---:|---|---|
-| 相機資訊 | GET | `/v1/camera` | 已實作，待硬體驗證 |
-| 拍照 | POST | `/v1/camera/capture` | 已實作，待硬體驗證 |
-| 開始錄影 | POST | `/v1/camera/record/start` | 已實作，待硬體驗證 |
-| 停止錄影 | POST | `/v1/camera/record/stop` | 已實作，待硬體驗證 |
-| 媒體清單 | GET | `/v1/dcim/items` | 已實作，回應欄位待確認 |
-| 可用空間 | GET | `/v1/system/storage/freespace` | 已實作，待硬體驗證 |
-| 裝置序號 | GET | `/v1/system/serial_num` | 已實作，待硬體驗證 |
-| 媒體下載 | GET + Range | `/v1/dcim/items/<id>/<rendition>/download` | 已實作，待硬體驗證 |
+| GC1 握手／版本 | TCP | command `501` | 已實作，待硬體驗證 |
+| 拍照 | TCP | command `311`, payload `00` | 已實作，待硬體驗證 |
+| 開始一般錄影 | TCP | command `106`, payload `00` | 已實作，待硬體驗證 |
+| 停止錄影 | TCP | command `107`, empty payload | 已實作，待硬體驗證 |
+
+相簿列舉、原檔下載與縮圖下載尚未完成。GC1 必須接續實作 `9003/9004` 的檔案 frame 與相對應命令；在完成前，不把 `3000/v1` 路徑標示為 A000 可用功能。
 
 ## 分段傳輸
 
