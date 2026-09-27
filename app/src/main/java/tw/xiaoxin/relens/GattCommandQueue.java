@@ -11,6 +11,7 @@ import java.util.UUID;
 final class GattCommandQueue {
     interface Writer { boolean write(UUID characteristic, byte[] value); }
     interface Scheduler { void schedule(Runnable action, long delayMs); }
+    interface Clock { long nowMs(); }
     interface Listener {
         void onProgress(String label, int remaining);
         void onComplete();
@@ -32,21 +33,31 @@ final class GattCommandQueue {
     private final Writer writer;
     private final Listener listener;
     private final Scheduler scheduler;
+    private final Clock clock;
     private final long throttleMs;
     private final ArrayDeque<Packet> packets = new ArrayDeque<>();
     private Packet inFlight;
     private boolean waitingForThrottle;
+    private long lastDispatchAtMs = Long.MIN_VALUE;
     private long generation;
 
     GattCommandQueue(Writer writer, Listener listener) {
-        this(writer, listener, (action, delayMs) -> action.run(), 0L);
+        this(writer, listener, (action, delayMs) -> action.run(), 0L,
+                () -> System.nanoTime() / 1_000_000L);
     }
 
     GattCommandQueue(Writer writer, Listener listener, Scheduler scheduler, long throttleMs) {
+        this(writer, listener, scheduler, throttleMs,
+                () -> System.nanoTime() / 1_000_000L);
+    }
+
+    GattCommandQueue(Writer writer, Listener listener, Scheduler scheduler, long throttleMs,
+            Clock clock) {
         this.writer = writer;
         this.listener = listener;
         this.scheduler = scheduler;
         this.throttleMs = Math.max(0L, throttleMs);
+        this.clock = clock;
     }
 
     synchronized void replace(List<Packet> commands) {
@@ -80,7 +91,10 @@ final class GattCommandQueue {
         }
         waitingForThrottle = true;
         long expectedGeneration = generation;
-        scheduler.schedule(() -> resumeAfterThrottle(expectedGeneration), throttleMs);
+        long elapsed = lastDispatchAtMs == Long.MIN_VALUE ? throttleMs
+                : Math.max(0L, clock.nowMs() - lastDispatchAtMs);
+        long remaining = Math.max(0L, throttleMs - elapsed);
+        scheduler.schedule(() -> resumeAfterThrottle(expectedGeneration), remaining);
     }
 
     synchronized boolean isBusy() {
@@ -102,6 +116,7 @@ final class GattCommandQueue {
         }
         inFlight = next;
         listener.onProgress(next.label, packets.size());
+        lastDispatchAtMs = clock.nowMs();
         if (!writer.write(next.characteristic, next.value)) {
             fail("Android 未接受 GATT 寫入請求");
         }

@@ -23,6 +23,7 @@ import android.net.wifi.p2p.WifiP2pManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import java.nio.charset.StandardCharsets;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -45,6 +46,7 @@ final class ReConnectionManager {
     private static final UUID DEVICE_INFORMATION_SERVICE = UUID.fromString("0000180a-0000-1000-8000-00805f9b34fb");
     private static final UUID FIRMWARE_REVISION = UUID.fromString("00002a26-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_BOOT_READY = UUID.fromString("0000a101-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_HARDWARE_STATUS = UUID.fromString("0000a102-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_BOOT_COMMAND = UUID.fromString("0000a107-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PASSWORD_REQUEST = UUID.fromString("0000a105-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PASSWORD_RESULT = UUID.fromString("0000a106-0000-1000-8000-00805f9b34fb");
@@ -53,6 +55,7 @@ final class ReConnectionManager {
     private static final UUID GC1_PHONE_PASSWORD = UUID.fromString("0000a302-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PHONE_CONFIG = UUID.fromString("0000a303-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_PHONE_RESULT = UUID.fromString("0000a304-0000-1000-8000-00805f9b34fb");
+    private static final UUID GC1_CAMERA_ERROR = UUID.fromString("0000a805-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_NOTIFY_PRIMARY = UUID.fromString("0000ae01-0000-1000-8000-00805f9b34fb");
     private static final UUID GC1_NOTIFY_SECONDARY = UUID.fromString("0000ae02-0000-1000-8000-00805f9b34fb");
     private static final byte WIFI_CONFIG_REQUEST = 0x21;
@@ -123,6 +126,7 @@ final class ReConnectionManager {
     private int gc1BleFirmwareVersion = -1;
     private A000ConnectionState a000State = A000ConnectionState.IDLE;
     private long transactionSequence;
+    private long lastBootGattDispatchAtMs = Long.MIN_VALUE;
     private boolean gattConnectedSignal;
     private boolean aclConnectedSignal;
     private boolean serviceDiscoveryStarted;
@@ -154,9 +158,9 @@ final class ReConnectionManager {
             transition(A000ConnectionState.ERROR, "boot attempts exhausted");
             setP2p("RE 啟動回覆逾時，請重新連線再試");
         } else if (operation == Gc1BootProtocol.TimeoutOperation.READ_A101) {
-            main.postDelayed(this::readGc1BootState, GC1_GATT_THROTTLE_MS);
+            main.postDelayed(this::readGc1BootState, remainingBootGattThrottleMs());
         } else {
-            main.postDelayed(this::beginGc1WakeAttempt, GC1_GATT_THROTTLE_MS);
+            main.postDelayed(this::beginGc1WakeAttempt, remainingBootGattThrottleMs());
         }
     };
     private final Runnable serviceDiscoveryFallback = () -> startServiceDiscovery("ACL fallback");
@@ -650,7 +654,7 @@ final class ReConnectionManager {
                 AppLog.i("BLE", "RE wake command accepted; waiting for A101 ready event=17");
                 trace("WRITE_CALLBACK", GC1_BOOT_COMMAND, characteristic.getValue(),
                         "status=" + status + " throttleMs=" + GC1_GATT_THROTTLE_MS);
-                main.postDelayed(() -> readGc1WakeEcho(current), GC1_GATT_THROTTLE_MS);
+                main.postDelayed(() -> readGc1WakeEcho(current), remainingBootGattThrottleMs());
                 return;
             }
             if (controlProfile == 1) {
@@ -765,15 +769,19 @@ final class ReConnectionManager {
             if ((GC1_NOTIFY_PRIMARY.equals(id) || GC1_NOTIFY_SECONDARY.equals(id))
                     && value != null && value.length > 0) {
                 UUID mapped = gc1EventCharacteristic(value[0]);
+                byte[] payload = new byte[value.length - 1];
+                System.arraycopy(value, 1, payload, 0, payload.length);
                 if (mapped != null) {
-                    byte[] payload = new byte[value.length - 1];
-                    System.arraycopy(value, 1, payload, 0, payload.length);
                     AppLog.i("BLE", "GC1 multiplex event=" + (value[0] & 0xff)
                             + " mapped=" + mapped + " length=" + payload.length);
+                    trace("EVENT", mapped, payload, "source=" + id
+                            + " event=0x" + String.format(Locale.US, "%02X", value[0] & 0xff));
                     handleStatusNotification(mapped, payload);
                 } else {
                     AppLog.i("BLE", "GC1 multiplex event=" + (value[0] & 0xff)
                             + " unmapped length=" + (value.length - 1));
+                    trace("EVENT_UNMAPPED", null, payload, "source=" + id
+                            + " event=0x" + String.format(Locale.US, "%02X", value[0] & 0xff));
                 }
                 return;
             }
@@ -1054,7 +1062,9 @@ final class ReConnectionManager {
     private UUID gc1EventCharacteristic(byte eventId) {
         int target = Gc1MultiplexEvent.target(eventId);
         if (target == Gc1MultiplexEvent.BOOT_READY) return GC1_BOOT_READY;
+        if (target == Gc1MultiplexEvent.HARDWARE_STATUS) return GC1_HARDWARE_STATUS;
         if (target == Gc1MultiplexEvent.PHONE_WIFI_RESULT) return GC1_PHONE_RESULT;
+        if (target == Gc1MultiplexEvent.CAMERA_ERROR) return GC1_CAMERA_ERROR;
         return null;
     }
 
@@ -1169,6 +1179,7 @@ final class ReConnectionManager {
             setP2p("正在讀取 RE 啟動狀態");
             trace("READ_START", GC1_BOOT_READY, null,
                     "properties=" + gc1BootReady.getProperties());
+            markBootGattDispatch();
             if (!current.readCharacteristic(gc1BootReady)) {
                 bootReadInFlight = false;
                 setP2p("Android 未接受 RE 啟動狀態讀取");
@@ -1183,6 +1194,11 @@ final class ReConnectionManager {
         BluetoothGatt current = gatt;
         if (bootWakeInFlight || current == null || gc1BootCommand == null
                 || gc1BleFirmwareVersion < 0) return;
+        long throttleDelay = remainingBootGattThrottleMs();
+        if (throttleDelay > 0L) {
+            main.postDelayed(this::beginGc1WakeAttempt, throttleDelay);
+            return;
+        }
         bootWakeInFlight = true;
         bootWakeAttempts++;
         transition(A000ConnectionState.BOOT_WAITING, "A101 waiter armed attempt=" + bootWakeAttempts);
@@ -1193,6 +1209,7 @@ final class ReConnectionManager {
                 + " waiterArmed=true timeoutMs=" + timeoutMs);
         main.removeCallbacks(bootTimeout);
         main.postDelayed(bootTimeout, timeoutMs);
+        markBootGattDispatch();
         if (!writeGattPacket(GC1_BOOT_COMMAND, command)) {
             main.removeCallbacks(bootTimeout);
             bootWakeInFlight = false;
@@ -1204,7 +1221,13 @@ final class ReConnectionManager {
         if (expectedGatt == null || expectedGatt != gatt || !reGattConnected
                 || !bootWakeInFlight || bootPreparationComplete || gc1BootCommand == null) return;
         try {
+            long throttleDelay = remainingBootGattThrottleMs();
+            if (throttleDelay > 0L) {
+                main.postDelayed(() -> readGc1WakeEcho(expectedGatt), throttleDelay);
+                return;
+            }
             trace("READ_START", GC1_BOOT_COMMAND, null, "expectedEcho=01");
+            markBootGattDispatch();
             if (!expectedGatt.readCharacteristic(gc1BootCommand)) {
                 AppLog.w("BLE", "Android rejected A107 read-back");
             }
@@ -1259,6 +1282,25 @@ final class ReConnectionManager {
     }
 
     private void handleStatusNotification(UUID characteristicId, byte[] value) {
+        if (controlProfile == 1 && GC1_HARDWARE_STATUS.equals(characteristicId)) {
+            if (value != null && value.length == 6) {
+                AppLog.i("BLE", "A102 hardware status battery=" + (value[1] & 0xff)
+                        + " usbStorage=" + (value[3] & 0xff)
+                        + " adapter=" + (value[5] & 0xff));
+            }
+            return;
+        }
+        if (controlProfile == 1 && GC1_CAMERA_ERROR.equals(characteristicId)) {
+            if (value != null && value.length >= 8) {
+                int errorIndex = littleEndianInt(value, 0);
+                int errorCode = littleEndianInt(value, 4);
+                String meaning = errorIndex == 7 && errorCode == 49
+                        ? "ERR_NO_SD_CARD" : "unknown";
+                AppLog.w("BLE", "A805 camera error index=" + errorIndex
+                        + " code=" + errorCode + " meaning=" + meaning);
+            }
+            return;
+        }
         if (controlProfile == 1 && GC1_BOOT_READY.equals(characteristicId)) {
             if (Gc1BootState.isReady(value)) {
                 main.removeCallbacks(bootTimeout);
@@ -1402,6 +1444,7 @@ final class ReConnectionManager {
         bootPreparationComplete = false;
         firmwareReadInFlight = false;
         gc1BleFirmwareVersion = -1;
+        lastBootGattDispatchAtMs = Long.MIN_VALUE;
         gc1BootReady = null;
         gc1BootCommand = null;
         gc1PasswordRequest = null;
@@ -1420,6 +1463,24 @@ final class ReConnectionManager {
         A000ConnectionState previous = a000State;
         a000State = next;
         AppLog.i("A000", "STATE " + previous + " -> " + next + " reason=" + reason);
+    }
+
+    private void markBootGattDispatch() {
+        lastBootGattDispatchAtMs = SystemClock.elapsedRealtime();
+    }
+
+    private long remainingBootGattThrottleMs() {
+        if (lastBootGattDispatchAtMs == Long.MIN_VALUE) return 0L;
+        long elapsed = Math.max(0L, SystemClock.elapsedRealtime() - lastBootGattDispatchAtMs);
+        return Math.max(0L, GC1_GATT_THROTTLE_MS - elapsed);
+    }
+
+    private static int littleEndianInt(byte[] value, int offset) {
+        if (value == null || offset < 0 || value.length < offset + 4) return -1;
+        return (value[offset] & 0xff)
+                | ((value[offset + 1] & 0xff) << 8)
+                | ((value[offset + 2] & 0xff) << 16)
+                | ((value[offset + 3] & 0xff) << 24);
     }
 
     private void trace(String operation, UUID characteristic, byte[] payload, String detail) {

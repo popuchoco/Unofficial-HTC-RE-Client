@@ -73,26 +73,28 @@ public class GattCommandQueueTest {
         assertTrue(error[0].contains("stage=country"));
     }
 
-    @Test public void throttleWaitsAfterCallbackBeforeWritingNextPacket() {
+    @Test public void throttleUsesDispatchTimeNotCallbackTime() {
         List<byte[]> writes = new ArrayList<>();
         List<Runnable> scheduled = new ArrayList<>();
         List<Long> delays = new ArrayList<>();
+        long[] now = {10_000L};
         GattCommandQueue queue = new GattCommandQueue((id, value) -> {
             writes.add(value.clone());
             return true;
         }, new NoOpListener(), (action, delayMs) -> {
             scheduled.add(action);
             delays.add(delayMs);
-        }, 1_500L);
+        }, 1_500L, () -> now[0]);
 
         queue.replace(Arrays.asList(
                 new GattCommandQueue.Packet(CHARACTERISTIC, new byte[]{1}, "one"),
                 new GattCommandQueue.Packet(CHARACTERISTIC, new byte[]{2}, "two")));
+        now[0] = 10_240L;
         queue.onCharacteristicWrite(CHARACTERISTIC, BluetoothGatt.GATT_SUCCESS);
 
         assertEquals(1, writes.size());
         assertTrue(queue.isBusy());
-        assertEquals(Arrays.asList(1_500L), delays);
+        assertEquals(Arrays.asList(1_260L), delays);
         scheduled.get(0).run();
         assertEquals(2, writes.size());
     }
