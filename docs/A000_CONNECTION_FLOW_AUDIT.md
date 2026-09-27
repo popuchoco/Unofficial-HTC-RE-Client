@@ -1,6 +1,6 @@
 # A000 連線流程稽核
 
-狀態：2026-09-25 完成第一輪靜態流程稽核。此文件是後續連線層修改的基準；在表內的必要前置條件與分支尚未實作、且沒有實機封包證據前，不以調整 timeout、重試次數或猜測 payload 的方式發版。
+狀態：2026-09-27 已在 `0.4.20` 診斷版實作 2A26 版本讀取、互斥 boot 分支、A000 狀態／transaction trace，以及 Wi-Fi GATT write callback 後 1.5 秒節流；單元測試覆蓋版本門檻、兩條 boot operation order 與 queue 節流。實機 transaction trace 尚待驗證，因此本版仍屬診斷版。
 
 ## 稽核結論
 

@@ -10,6 +10,7 @@ import java.util.UUID;
 /** Serializes GATT writes. A packet advances only after its write callback succeeds. */
 final class GattCommandQueue {
     interface Writer { boolean write(UUID characteristic, byte[] value); }
+    interface Scheduler { void schedule(Runnable action, long delayMs); }
     interface Listener {
         void onProgress(String label, int remaining);
         void onComplete();
@@ -30,24 +31,38 @@ final class GattCommandQueue {
 
     private final Writer writer;
     private final Listener listener;
+    private final Scheduler scheduler;
+    private final long throttleMs;
     private final ArrayDeque<Packet> packets = new ArrayDeque<>();
     private Packet inFlight;
+    private boolean waitingForThrottle;
+    private long generation;
 
     GattCommandQueue(Writer writer, Listener listener) {
+        this(writer, listener, (action, delayMs) -> action.run(), 0L);
+    }
+
+    GattCommandQueue(Writer writer, Listener listener, Scheduler scheduler, long throttleMs) {
         this.writer = writer;
         this.listener = listener;
+        this.scheduler = scheduler;
+        this.throttleMs = Math.max(0L, throttleMs);
     }
 
     synchronized void replace(List<Packet> commands) {
+        generation++;
         packets.clear();
         packets.addAll(commands);
         inFlight = null;
+        waitingForThrottle = false;
         writeNext();
     }
 
     synchronized void cancel() {
+        generation++;
         packets.clear();
         inFlight = null;
+        waitingForThrottle = false;
     }
 
     synchronized void onCharacteristicWrite(UUID characteristic, int status) {
@@ -59,10 +74,24 @@ final class GattCommandQueue {
             return;
         }
         inFlight = null;
-        writeNext();
+        if (packets.isEmpty() || throttleMs == 0L) {
+            writeNext();
+            return;
+        }
+        waitingForThrottle = true;
+        long expectedGeneration = generation;
+        scheduler.schedule(() -> resumeAfterThrottle(expectedGeneration), throttleMs);
     }
 
-    synchronized boolean isBusy() { return inFlight != null || !packets.isEmpty(); }
+    synchronized boolean isBusy() {
+        return inFlight != null || waitingForThrottle || !packets.isEmpty();
+    }
+
+    private synchronized void resumeAfterThrottle(long expectedGeneration) {
+        if (generation != expectedGeneration || !waitingForThrottle) return;
+        waitingForThrottle = false;
+        writeNext();
+    }
 
     private void writeNext() {
         if (inFlight != null) return;
@@ -79,8 +108,10 @@ final class GattCommandQueue {
     }
 
     private void fail(String message) {
+        generation++;
         packets.clear();
         inFlight = null;
+        waitingForThrottle = false;
         listener.onError(message);
     }
 

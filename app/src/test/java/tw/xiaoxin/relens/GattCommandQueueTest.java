@@ -72,4 +72,34 @@ public class GattCommandQueueTest {
         assertTrue(error[0].contains("length=4"));
         assertTrue(error[0].contains("stage=country"));
     }
+
+    @Test public void throttleWaitsAfterCallbackBeforeWritingNextPacket() {
+        List<byte[]> writes = new ArrayList<>();
+        List<Runnable> scheduled = new ArrayList<>();
+        List<Long> delays = new ArrayList<>();
+        GattCommandQueue queue = new GattCommandQueue((id, value) -> {
+            writes.add(value.clone());
+            return true;
+        }, new NoOpListener(), (action, delayMs) -> {
+            scheduled.add(action);
+            delays.add(delayMs);
+        }, 1_500L);
+
+        queue.replace(Arrays.asList(
+                new GattCommandQueue.Packet(CHARACTERISTIC, new byte[]{1}, "one"),
+                new GattCommandQueue.Packet(CHARACTERISTIC, new byte[]{2}, "two")));
+        queue.onCharacteristicWrite(CHARACTERISTIC, BluetoothGatt.GATT_SUCCESS);
+
+        assertEquals(1, writes.size());
+        assertTrue(queue.isBusy());
+        assertEquals(Arrays.asList(1_500L), delays);
+        scheduled.get(0).run();
+        assertEquals(2, writes.size());
+    }
+
+    private static final class NoOpListener implements GattCommandQueue.Listener {
+        @Override public void onProgress(String label, int remaining) { }
+        @Override public void onComplete() { }
+        @Override public void onError(String message) { }
+    }
 }

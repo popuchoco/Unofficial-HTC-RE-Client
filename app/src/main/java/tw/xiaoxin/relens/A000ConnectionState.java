@@ -1,0 +1,19 @@
+package tw.xiaoxin.relens;
+
+enum A000ConnectionState {
+    IDLE,
+    GATT_CONNECTED,
+    SERVICES_READY,
+    PASSWORD_VERIFYING,
+    VERIFIED,
+    EVENT_CHANNEL_INIT,
+    BLE_FW_READING,
+    BLE_FW_KNOWN,
+    P2P_GROUP_READY,
+    BOOT_WAITING,
+    BOOT_READY,
+    WIFI_BOOTSTRAP,
+    IP_WAITING,
+    IP_READY,
+    ERROR
+}
