@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.RELens" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.RELens" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">true</item>
         <item name="android:statusBarColor">@color/paper</item><item name="android:navigationBarColor">@color/paper</item>
         <item name="android:colorAccent">@color/signal</item><item name="android:windowActionModeOverlay">true</item>

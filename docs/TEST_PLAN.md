@@ -10,7 +10,7 @@
 - 在背景監看開啟、Activity 重建、BLE 斷線與連續點擊連線情境下，確認只有一個 GATT session、一次認證與一組 AE01/AE02 訂閱。
 - 連續重試 Wi-Fi bootstrap，確認 UDP 7777 無 `BindException`，舊 session 的 IP 不會覆蓋新 session。
 - GC1 405 分段下載必測第一包 1-byte status 計入 wire offset、後續包連續性、中斷後 socket 重建與斷點續傳。
-- A000 拍照取景器嚴格驗證 `261(00)` → `234(60 09)` → `233(02)` → `235(02)` → `130` 的操作順序；`130` 回傳 URI 後立即啟動播放器，不得等待 event `0x4012`。空 URI 使用 `rtsp://<camera-ip>:8554/MJPEG_unicast`；晚到或完全未到的 `0x4012` 都不得使啟動失敗。預覽啟動中切頁、131 逾時與 Activity 重建不得阻擋相簿重新整理或讓舊 callback 寫入新頁面。
+- RTSP 控制流程保留協議測試，但 UI 不啟動播放器：實機已確認 RTP/JPEG payload type 26 不受 Media3 支援。未來 decoder 接入前，不得恢復自動重試或把狀態顯示為可用。
 - Android 10+ 下載成功後，照片須出現在 `Pictures/RE Lens`、影片須出現在 `Movies/RE Lens`；傳輸失敗不得留下 pending MediaStore 項目。Android 8–9 驗證儲存權限與媒體掃描。
 - Samsung S21 實機已確認 MediaStore 照片下載成功並產生公開 Images URI；影片與 Android 8–9 路徑仍列入硬體矩陣。
 - 確認匯出 log 不含 SSID、passphrase、OAuth token 或 YouTube stream key。
@@ -22,6 +22,8 @@
 - `200`／`206` Range 續傳及錯誤 Content-Range。
 - 媒體 ID／檔名正規化與路徑邊界。
 - GC1 相簿空清單、未知媒體類型、detail handle 不符及 fragment offset 不連續。
+- GC1 `408` 刪除 payload 必須含 little-endian handle 與結尾 `00000000`；UI 必須二次確認，成功後重新載入清單。
+- GC1 `213` 驗證各模式剩餘數量、free bytes、total bytes、格式化容量與使用比例。
 - 連線狀態機的合法及非法轉移。
 - Android 8、11、12、13、14、15 權限流程與 Activity 重建。
 - 深淺色切換、最大字體、五頁導覽及 Console 顯示／隱藏。
@@ -40,7 +42,7 @@
 | HW-07 | 照片下載 | 檔案可開啟且大小正確 |
 | HW-08 | 影片續傳 | 中斷後續傳，結果可播放 |
 | HW-09 | 30 分鐘連線 | 無資源洩漏或無限重連 |
-| HW-10 | RTSP | `130` URI 可播放；延遲、方向、離頁 `131` 與解碼器釋放符合規格 |
+| HW-10 | RTSP | 暫緩；待 RFC 2435 相容 decoder 後重新啟用播放驗證 |
 | HW-11 | GC1 續傳 | 中斷後以現有長度作為 `405` offset，輸出檔案雜湊與來源一致 |
 
 手機矩陣至少包含 Android 8、Android 12、Android 15，以及兩家不同品牌／晶片的 Wi‑Fi Direct 實作。

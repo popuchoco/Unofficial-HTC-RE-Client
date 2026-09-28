@@ -66,4 +66,26 @@ public class Gc1SocketClientTest {
         assertTrue(Gc1SocketClient.isLiveReadyEvent(0x4012));
         assertFalse(Gc1SocketClient.isLiveReadyEvent(0x5002));
     }
+
+    @Test public void encodesDeleteHandleWithTerminator() {
+        assertArrayEquals(new byte[]{0x78, 0x56, 0x34, 0x12, 0, 0, 0, 0},
+                Gc1SocketClient.encodeDeletePayload(0x12345678));
+    }
+
+    @Test public void encodesStorageQuerySelector() {
+        assertArrayEquals(new byte[]{0}, Gc1SocketClient.storageInfoPayload());
+    }
+
+    @Test public void decodesStorageCapacityAndRemainingCounts() throws Exception {
+        ByteBuffer data = ByteBuffer.allocate(26).order(ByteOrder.LITTLE_ENDIAN)
+                .put((byte) 0).putInt(321)
+                .put((byte) 3).putInt(45)
+                .putLong(2_000_000_000L).putLong(8_000_000_000L);
+        data.flip();
+        Gc1SocketClient.StorageInfo result = Gc1SocketClient.decodeStorageInfo(data);
+        assertEquals(2_000_000_000L, result.freeBytes);
+        assertEquals(8_000_000_000L, result.totalBytes);
+        assertEquals(321L, result.photo);
+        assertEquals(45L, result.video);
+    }
 }

@@ -18,7 +18,8 @@ final class ReApi implements Closeable {
     JSONObject startRecording() throws Exception { return gc1.startRecording(); }
     JSONObject stopRecording() throws Exception { return gc1.stopRecording(); }
     JSONArray media() throws Exception { return gc1.media(); }
-    JSONObject storage() throws Exception { return json("GET", "/v1/system/storage/freespace", null); }
+    JSONObject storage() throws Exception { return gc1.storageInfo(); }
+    void deleteMedia(JSONObject item) throws Exception { gc1.deleteMedia((int) item.getLong("handle")); }
     JSONObject serial() throws Exception { return json("GET", "/v1/system/serial_num", null); }
     String startLiveView() throws Exception { return gc1.startLiveView(); }
     void stopLiveView() throws Exception { gc1.stopLiveView(); }

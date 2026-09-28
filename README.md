@@ -4,15 +4,15 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前診斷版：`0.5.7`。A000 初始化在密碼驗證與 AE01/AE02 訂閱後，先讀取 Device Information `180A/2A26` 的 BLE firmware version；解析成功後才建立 Wi-Fi Direct group，並依 `BLE FW > 2250` 嚴格選擇新版或舊版 boot 分支。GATT session 會阻止重複連線與重複初始化；Android 10+ 則強制建立具完整 owner 憑證的 2.4 GHz Wi-Fi Direct group。GC1 相簿下載使用 MediaStore；A000 拍照取景器依序設定 Still mode、24 fps、M 尺寸與 High 壓縮率，command 130 回傳後立即將 URI 交給播放器；`0x4012` 僅作為非阻塞的 ready 診斷事件。
+> 目前版本：`0.6.0`。介面採用連線 dashboard、Material 3 底部導航與人性化裝置資訊。GC1 相簿支援 MediaStore 下載及確認後刪除 RE 原檔；裝置頁可讀取韌體版本與 microSD 可用／總容量。RE 的 RTSP 採 RTP/JPEG payload type 26，現有 Media3 無法解碼，因此即時預覽暫列未來功能，拍照與錄影控制不受影響。
 
 Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGroup()` 後會等待 owner group 的 SSID 與密碼真正可用，才啟動 BLE bootstrap。
 
 - 「連線」頁位於最左側：BLE 掃描／連線、Wi-Fi Direct group、背景連線、斷線提醒及藍牙／Wi-Fi 狀態。
 - 連線層以序列 GATT 佇列傳送 Wi-Fi Direct SSID、密碼與 station/config；每一個封包都必須收到 characteristic callback 才會前進。
 - 解析 RE 的 Wi-Fi 設定狀態與相機 IPv4，供 GC1 socket 與 RTSP 使用。
-- A000／GC1 原生 socket 拍照、錄影、版本讀取、相簿列舉及原檔續傳。
-- 拍攝頁內建 RTSP 即時預覽；串流頁保留 YouTube Live 控制面，RTSP→RTMP 媒體 relay 尚待完成。
+- A000／GC1 原生 socket 拍照、錄影、版本與儲存空間讀取、相簿列舉、刪除及原檔續傳。
+- 即時預覽列為未來功能；串流頁保留 YouTube Live 控制面，RTSP→RTMP 媒體 relay 尚待完成。
 - 裝置資訊、深色／淺色／系統主題、偵錯 console 與操作 log 匯出。
 
 ## 平台設定

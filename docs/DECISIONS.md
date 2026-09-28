@@ -39,9 +39,9 @@ API 29+ 使用公開的 `WifiP2pGroup.getFrequency()`；較舊版本將頻率視
 
 媒體下載以既有檔案長度作為 Range 起點，並處理 `200` 與 `206`，降低大檔案因鏈路中斷而重傳的成本。
 
-## ADR-007：RTSP 使用內建播放器
+## ADR-007：RTSP 預覽暫列未來功能
 
-以 Media3 在拍攝頁內播放 RE 的 RTSP 畫面，並隨頁面生命週期送出啟動／停止命令及釋放解碼器；不以外部 Intent 或 WebView 代替。A000 空 URI 使用其 GC1 位址 `rtsp://<camera-ip>:8554/MJPEG_unicast`，不得混用其他裝置世代的 `/live` 路徑。
+實機已證明 GC1 command `130` 與 event `0x4012` 能正常啟動串流，但 SDP 使用 Media3 不支援的 RTP/JPEG static payload type 26。參考取景器採專用逐幀串流元件，因此移除無效的 Media3 自動重試，拍攝控制繼續提供；待有 RFC 2435 相容解碼器後再恢復內嵌預覽。
 
 ## ADR-008：預覽品質先採 Auto
 

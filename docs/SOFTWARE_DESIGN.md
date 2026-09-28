@@ -33,7 +33,7 @@ Android UI → ConnectionCoordinator
 | ReApi | 依裝置世代選擇控制與媒體 API；目前 A000 使用 GC1 transport |
 | Gc1SocketClient | GC1 的 9000–9004 socket、501 握手、拍攝、相簿、分段下載、RTSP session 與事件追蹤 |
 | MediaRepository | 分頁、下載、續傳、驗證與 MediaStore |
-| Media3 ExoPlayer | 拍攝頁 live view、RTSP 解碼與畫面生命週期 |
+| RTP/JPEG preview（未來） | RE 使用 payload type 26；需 RFC 2435 depacketizer／decoder，不能由 Media3 直接播放 |
 | DeviceRepository | 裝置資訊與儲存狀態 |
 | ConnectionMonitorService | 前景服務、背景狀態通知與斷線提醒 |
 | AppLog | 有界記憶體操作紀錄、敏感值遮蔽與 SAF 匯出 |

@@ -128,6 +128,27 @@ final class Gc1SocketClient implements Closeable {
         return result;
     }
 
+    synchronized JSONObject storageInfo() throws Exception {
+        ensureConnected();
+        Response response = exchange(213, storageInfoPayload());
+        ByteBuffer data = ByteBuffer.wrap(response.body).order(ByteOrder.LITTLE_ENDIAN);
+        requireSuccess(data, 213);
+        StorageInfo info = decodeStorageInfo(data);
+        JSONObject remaining = new JSONObject();
+        if (info.photo >= 0) remaining.put("photo", info.photo);
+        if (info.video >= 0) remaining.put("video", info.video);
+        if (info.timelapse >= 0) remaining.put("timelapse", info.timelapse);
+        if (info.slowMotion >= 0) remaining.put("slow_motion", info.slowMotion);
+        return new JSONObject().put("free_bytes", info.freeBytes).put("total_bytes", info.totalBytes)
+                .put("remaining", remaining);
+    }
+
+    synchronized void deleteMedia(int handle) throws Exception {
+        ensureConnected();
+        request(408, encodeDeletePayload(handle));
+        AppLog.i("GC1-MEDIA", "Deleted media handle=" + Integer.toUnsignedString(handle));
+    }
+
     synchronized void download(int handle, long offset, long total, OutputStream output,
                                TransferProgress progress) throws Exception {
         ensureConnected();
@@ -196,6 +217,37 @@ final class Gc1SocketClient implements Closeable {
     static byte[] liveSizePayload() { return new byte[]{2}; }
     static byte[] liveCompressionPayload() { return new byte[]{2}; }
     static boolean isLiveReadyEvent(int event) { return event == 0x4012; }
+
+    static byte[] encodeDeletePayload(int handle) {
+        return ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(handle).putInt(0).array();
+    }
+
+    static byte[] storageInfoPayload() { return new byte[]{0}; }
+
+    static StorageInfo decodeStorageInfo(ByteBuffer data) throws IOException {
+        if (data.remaining() < 16 || (data.remaining() - 16) % 5 != 0)
+            throw new IOException("GC1 storage response length invalid: " + data.remaining());
+        long photo = -1, video = -1, timelapse = -1, slowMotion = -1;
+        int entries = (data.remaining() - 16) / 5;
+        for (int i = 0; i < entries; i++) {
+            int type = data.get() & 0xff;
+            long count = Integer.toUnsignedLong(data.getInt());
+            if (type == 0) photo = count;
+            else if (type == 3) video = count;
+            else if (type == 8) timelapse = count;
+            else if (type == 9) slowMotion = count;
+        }
+        long free = data.getLong(), total = data.getLong();
+        return new StorageInfo(free, total, photo, video, timelapse, slowMotion);
+    }
+
+    static final class StorageInfo {
+        final long freeBytes, totalBytes, photo, video, timelapse, slowMotion;
+        StorageInfo(long freeBytes, long totalBytes, long photo, long video, long timelapse, long slowMotion) {
+            this.freeBytes = freeBytes; this.totalBytes = totalBytes; this.photo = photo;
+            this.video = video; this.timelapse = timelapse; this.slowMotion = slowMotion;
+        }
+    }
 
     private JSONObject mediaDetail(MediaSummary summary) throws Exception {
         ByteBuffer request = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(summary.handle);
