@@ -2,6 +2,8 @@ package tw.xiaoxin.relens;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -47,9 +49,20 @@ public class Gc1SocketClientTest {
     }
 
     @Test public void statusOnlyLiveViewResponseUsesGc1Uri() throws Exception {
-        assertEquals("rtsp://192.168.49.74/live",
+        assertEquals("rtsp://192.168.49.74:8554/MJPEG_unicast",
                 Gc1SocketClient.liveViewUri("192.168.49.74", new byte[0]));
         assertEquals("rtsp://camera/custom", Gc1SocketClient.liveViewUri("ignored",
                 "rtsp://camera/custom\0".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
+    @Test public void encodesGc1LiveViewProfile() {
+        assertArrayEquals(new byte[]{(byte) 0xb8, 0x0b}, Gc1SocketClient.liveFrameRatePayload());
+        assertArrayEquals(new byte[]{1}, Gc1SocketClient.liveSizePayload());
+        assertArrayEquals(new byte[]{2}, Gc1SocketClient.liveCompressionPayload());
+    }
+
+    @Test public void only4012MarksLiveViewReady() {
+        assertTrue(Gc1SocketClient.isLiveReadyEvent(0x4012));
+        assertFalse(Gc1SocketClient.isLiveReadyEvent(0x5002));
     }
 }

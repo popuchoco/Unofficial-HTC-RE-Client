@@ -7,7 +7,7 @@
 - BLE：裝置探索、配對、網路參數設定及低流量控制。
 - Wi‑Fi Direct：建立手機與相機之間的 IP 資料鏈路。
 - HTTP：控制請求、媒體清單及檔案下載。
-- RTSP：先以 command `130` 取得相機回傳 URI，再由 Media3 播放；command `131` 停止。
+- RTSP：A000／GC1 依序以 command `234` 設定 30 fps、`233` 設定 S 尺寸、`235` 設定 High 壓縮率，再送出 `130`；收到事件 `0x4012` 確認串流 ready 後才由 Media3 播放，command `131` 停止。
 
 ## GC1 與 GC2 傳輸不可混用
 
@@ -23,7 +23,7 @@ A000／GC1 在取得相機 IP 後使用五條 TCP 通道：`9000` 命令送出�
 | 拍照 | TCP | command `311`, payload `00` | 已實作，待硬體驗證 |
 | 開始一般錄影 | TCP | command `106`, payload `00` | 已實作，待硬體驗證 |
 | 停止錄影 | TCP | command `107`, empty payload | 已實作，待硬體驗證 |
-| 啟動／停止即時預覽 | TCP + RTSP | command `130`／`131` | 已實作，待畫面驗證 |
+| 啟動／停止即時預覽 | TCP + RTSP | `234(3000 LE)` → `233(01)` → `235(02)` → `130` → event `0x4012`；`131` 停止 | 已實作，待畫面驗證 |
 | 媒體清單 | TCP | command `401`，每筆 9 bytes | 已實作，待硬體驗證 |
 | 媒體詳細資料 | TCP | command `404`，payload=handle | 已實作，待硬體驗證 |
 | 原檔續傳 | TCP `9003` | command `405`，payload=handle+offset | 已實作，待硬體驗證 |

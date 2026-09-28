@@ -37,6 +37,11 @@ final class ReApi implements Closeable {
             }, progress::onProgress);
         }
     }
+    void download(JSONObject item, OutputStream target, Progress progress) throws Exception {
+        long total = item.optLong("size", 0);
+        int handle = (int) item.getLong("handle");
+        gc1.download(handle, 0, total, target, progress::onProgress);
+    }
     private JSONObject json(String method, String path, JSONObject body) throws Exception {
         HttpURLConnection c = open(base + path, method);
         if (body != null) { c.setDoOutput(true); c.setRequestProperty("Content-Type", "application/json"); try(OutputStream o=c.getOutputStream()){o.write(body.toString().getBytes(StandardCharsets.UTF_8));} }

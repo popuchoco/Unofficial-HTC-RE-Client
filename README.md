@@ -4,7 +4,7 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前診斷版：`0.5.4`。A000 初始化在密碼驗證與 AE01/AE02 訂閱後，先讀取 Device Information `180A/2A26` 的 BLE firmware version；解析成功後才建立 Wi-Fi Direct group，並依 `BLE FW > 2250` 嚴格選擇新版或舊版 boot 分支。GATT session 會阻止重複連線與重複初始化；Android 10+ 則強制建立具完整 owner 憑證的 2.4 GHz Wi-Fi Direct group。GC1 相簿下載已分離 wire offset 與檔案 byte count，中斷傳輸會重建 socket session；RTSP command 130 只回狀態時使用 `rtsp://<camera-ip>/live`，播放器會在相機串流服務尚未就緒時有限次重試並記錄完整錯誤原因。
+> 目前診斷版：`0.5.5`。A000 初始化在密碼驗證與 AE01/AE02 訂閱後，先讀取 Device Information `180A/2A26` 的 BLE firmware version；解析成功後才建立 Wi-Fi Direct group，並依 `BLE FW > 2250` 嚴格選擇新版或舊版 boot 分支。GATT session 會阻止重複連線與重複初始化；Android 10+ 則強制建立具完整 owner 憑證的 2.4 GHz Wi-Fi Direct group。GC1 相簿下載已分離 wire offset 與檔案 byte count，中斷傳輸會重建 socket session；A000 RTSP 依序設定幀率、尺寸、壓縮率，送出 command 130 並等待 `0x4012` ready event 後才交給播放器。
 
 Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGroup()` 後會等待 owner group 的 SSID 與密碼真正可用，才啟動 BLE bootstrap。
 
@@ -45,13 +45,14 @@ RE 的區域網路 HTTP 端點需要 cleartext，相機流量因此保留 `usesC
 
 ## 相簿下載位置
 
-目前下載檔案存放在 App 專屬外部儲存空間的 `downloads` 目錄：
+Android 10 以上透過 MediaStore 儲存，不再放在 App 專屬的 `Android/data`。照片與影片分別出現在：
 
 ```text
-/storage/emulated/0/Android/data/tw.xiaoxin.relens/files/downloads/
+Pictures/RE Lens/
+Movies/RE Lens/
 ```
 
-Android 11 以上可能限制一般檔案管理器直接開啟 `Android/data`；移除 App 時，此目錄及其中檔案也會一併刪除。後續版本會改用 MediaStore，讓檔案直接出現在系統相簿或下載項目。
+檔案可由 Samsung Gallery、Google Photos 或 Samsung「我的檔案」開啟，解除安裝 App 時不會刪除。Android 8–9 使用相同的公開資料夾，首次使用時需允許儲存權限。
 
 ## 文件
 

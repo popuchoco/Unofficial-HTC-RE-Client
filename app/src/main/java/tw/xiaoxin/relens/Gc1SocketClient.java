@@ -42,6 +42,8 @@ final class Gc1SocketClient implements Closeable {
     private int sequence;
     private Handshake handshake;
     private volatile boolean closing;
+    private final Object liveReadyMonitor = new Object();
+    private boolean liveReady;
 
     Gc1SocketClient(String host) { this.host = host; }
 
@@ -76,6 +78,12 @@ final class Gc1SocketClient implements Closeable {
 
     synchronized String startLiveView() throws Exception {
         ensureConnected();
+        // GC1 requires the live-view profile before command 130. Each setting is a
+        // separate acknowledged command and must remain in this order.
+        request(234, liveFrameRatePayload());
+        request(233, liveSizePayload());
+        request(235, liveCompressionPayload());
+        synchronized (liveReadyMonitor) { liveReady = false; }
         Response response = exchange(130, null);
         ByteBuffer data = ByteBuffer.wrap(response.body).order(ByteOrder.LITTLE_ENDIAN);
         requireSuccess(data, 130);
@@ -83,6 +91,7 @@ final class Gc1SocketClient implements Closeable {
         data.get(uri);
         String value = liveViewUri(host, uri);
         if (uri.length == 0) AppLog.i("GC1-RTSP", "Command 130 returned status only; using GC1 live URI");
+        waitForLiveReady(10_000);
         AppLog.i("GC1-RTSP", "Live view URI=" + value);
         return value;
     }
@@ -180,10 +189,15 @@ final class Gc1SocketClient implements Closeable {
 
     static String liveViewUri(String host, byte[] responseUri) throws IOException {
         String value = trimCString(responseUri);
-        if (value.isEmpty()) return "rtsp://" + host + "/live";
+        if (value.isEmpty()) return "rtsp://" + host + ":8554/MJPEG_unicast";
         if (!value.startsWith("rtsp://")) throw new IOException("GC1 未回傳有效 RTSP URI: " + value);
         return value;
     }
+
+    static byte[] liveFrameRatePayload() { return ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 3000).array(); }
+    static byte[] liveSizePayload() { return new byte[]{1}; }
+    static byte[] liveCompressionPayload() { return new byte[]{2}; }
+    static boolean isLiveReadyEvent(int event) { return event == 0x4012; }
 
     private JSONObject mediaDetail(MediaSummary summary) throws Exception {
         ByteBuffer request = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(summary.handle);
@@ -307,6 +321,13 @@ final class Gc1SocketClient implements Closeable {
                         byte[] body = readExact(input, length - 12);
                         AppLog.i("GC1-EVENT", String.format(Locale.ROOT,
                                 "event=0x%04X seq=%d payload=%s", event, sequence, hex(body)));
+                        if (isLiveReadyEvent(event)) {
+                            synchronized (liveReadyMonitor) {
+                                liveReady = true;
+                                liveReadyMonitor.notifyAll();
+                            }
+                            AppLog.i("GC1-RTSP", "Live-ready event 0x4012 received");
+                        }
                     } catch (SocketTimeoutException timeout) {
                         AppLog.i("GC1-EVENT", "heartbeat wait timeout");
                     }
@@ -317,6 +338,17 @@ final class Gc1SocketClient implements Closeable {
         }, "Gc1EventReader");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    private void waitForLiveReady(long timeoutMs) throws InterruptedException, SocketTimeoutException {
+        long deadline = System.nanoTime() + timeoutMs * 1_000_000L;
+        synchronized (liveReadyMonitor) {
+            while (!liveReady) {
+                long remainingMs = (deadline - System.nanoTime()) / 1_000_000L;
+                if (remainingMs <= 0) throw new SocketTimeoutException("GC1 live-ready event 0x4012 timeout");
+                liveReadyMonitor.wait(remainingMs);
+            }
+        }
     }
 
     private static byte[] readExact(InputStream input, int count) throws IOException {
