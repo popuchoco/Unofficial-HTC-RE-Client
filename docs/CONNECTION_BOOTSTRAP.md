@@ -26,7 +26,7 @@ API 29+ 使用 `WifiP2pConfig.Builder` 建立自主 owner group 時，不能只�
 
 GC1 檔案通道的分段 wire offset 與實際寫入檔案的 byte count 必須分開計數：第一個 fragment 的 declared length 包含 1-byte status，因此寫入 32768 bytes 後，下一個 wire offset 為 32769。任一分段驗證失敗都必須關閉並重建 GC1 的 9000–9004 sockets，不得在含有殘留 frame 的 9003 socket 上繼續下一筆命令。
 
-GC1 拍照取景器必須逐筆等待 command 回覆，依序送出 `261`（Still mode，payload=`00`）、`234`（24 fps，payload=`60 09`）、`233`（M 尺寸，payload=`02`）、`235`（High 壓縮率，payload=`02`）及 `130`。30 fps／S profile 是遠端串流整合用途，不得混入拍照取景器。`130` 的同步成功只代表 RE 接受要求；收到事件 `0x4012` 才代表 RTSP stream ready。A000 若未在 `130` 回覆中附 URI，使用 `rtsp://<camera-ip>:8554/MJPEG_unicast`。切換頁籤時 command `131` 最多等待 3 秒；逾時即重建 GC1 session，不能長時間阻擋相簿或拍攝命令。
+GC1 拍照取景器必須逐筆等待 command 回覆，依序送出 `261`（Still mode，payload=`00`）、`234`（24 fps，payload=`60 09`）、`233`（M 尺寸，payload=`02`）、`235`（High 壓縮率，payload=`02`）及 `130`。30 fps／S profile 是遠端串流整合用途，不得混入拍照取景器。`130` 成功回應的狀態位元組後方即為 RTSP URI，應立即交給播放器；`0x4012` 是獨立的 ready 通知，只供狀態與診斷使用，不可阻塞 URI callback。A000 若未在 `130` 回覆中附 URI，使用 `rtsp://<camera-ip>:8554/MJPEG_unicast`。進入取景器前，參考流程另以 `222/02` 切換 Control mode 並以 `201` 查詢 DR 狀態；這組上游 gate 尚待獨立實作與測試，不得和 URI callback 修正混為同一實驗。切換頁籤時 command `131` 最多等待 3 秒；逾時即重建 GC1 session，不能長時間阻擋相簿或拍攝命令。
 
 Wi-Fi Direct group 建立前另有硬性前置條件：BLE 必須仍為 connected、RE 的短／長命令 characteristic 均已找到，而且狀態通知 CCCD 寫入成功。一般 BLE 周邊、無名廣播、尚未完成 service discovery 的裝置或已斷線的舊狀態，都不能進入 P2P 階段。
 

@@ -4,7 +4,7 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前診斷版：`0.5.6`。A000 初始化在密碼驗證與 AE01/AE02 訂閱後，先讀取 Device Information `180A/2A26` 的 BLE firmware version；解析成功後才建立 Wi-Fi Direct group，並依 `BLE FW > 2250` 嚴格選擇新版或舊版 boot 分支。GATT session 會阻止重複連線與重複初始化；Android 10+ 則強制建立具完整 owner 憑證的 2.4 GHz Wi-Fi Direct group。GC1 相簿下載使用 MediaStore；A000 拍照取景器依序設定 Still mode、24 fps、M 尺寸與 High 壓縮率，送出 command 130 並等待 `0x4012` ready event 後才交給播放器。
+> 目前診斷版：`0.5.7`。A000 初始化在密碼驗證與 AE01/AE02 訂閱後，先讀取 Device Information `180A/2A26` 的 BLE firmware version；解析成功後才建立 Wi-Fi Direct group，並依 `BLE FW > 2250` 嚴格選擇新版或舊版 boot 分支。GATT session 會阻止重複連線與重複初始化；Android 10+ 則強制建立具完整 owner 憑證的 2.4 GHz Wi-Fi Direct group。GC1 相簿下載使用 MediaStore；A000 拍照取景器依序設定 Still mode、24 fps、M 尺寸與 High 壓縮率，command 130 回傳後立即將 URI 交給播放器；`0x4012` 僅作為非阻塞的 ready 診斷事件。
 
 Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGroup()` 後會等待 owner group 的 SSID 與密碼真正可用，才啟動 BLE bootstrap。
 
