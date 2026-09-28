@@ -39,6 +39,10 @@ API 29+ 使用公開的 `WifiP2pGroup.getFrequency()`；較舊版本將頻率視
 
 媒體下載以既有檔案長度作為 Range 起點，並處理 `200` 與 `206`，降低大檔案因鏈路中斷而重傳的成本。
 
-## ADR-007：RTSP 延後
+## ADR-007：RTSP 使用內建播放器
 
-保留 `rtsp://<camera-ip>/live` 介面，首版不內建播放器。RTSP 解碼涉及生命週期、硬體解碼、延遲及授權評估，不以外部 Intent 或 WebView代替完整實作。
+以 Media3 在拍攝頁內播放 RE 的 RTSP 畫面，並隨頁面生命週期送出啟動／停止命令及釋放解碼器；不以外部 Intent 或 WebView 代替。A000 空 URI 使用其 GC1 位址 `rtsp://<camera-ip>:8554/MJPEG_unicast`，不得混用其他裝置世代的 `/live` 路徑。
+
+## ADR-008：預覽品質先採 Auto
+
+拍照取景器先固定採已確認的 Still mode、24 fps、M 尺寸及 High 壓縮率，並保留日後依播放 FPS 自動調整尺寸的架構。在基準取景流程完成實機驗證前，不把 RTSP FPS、尺寸及壓縮率暴露成一般設定，避免把縮時播放 FPS、拍攝解析度與預覽傳輸品質混為一談。後續若加入手動覆寫，放在「裝置 → 進階 → 預覽品質」，預設 Auto、保存偏好並提供恢復 Auto。

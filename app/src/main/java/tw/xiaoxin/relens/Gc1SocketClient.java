@@ -78,8 +78,9 @@ final class Gc1SocketClient implements Closeable {
 
     synchronized String startLiveView() throws Exception {
         ensureConnected();
-        // GC1 requires the live-view profile before command 130. Each setting is a
-        // separate acknowledged command and must remain in this order.
+        // The GC1 viewfinder first asserts still-photo mode, then configures its
+        // 24 fps / medium / high-compression profile before command 130.
+        request(261, liveStillModePayload());
         request(234, liveFrameRatePayload());
         request(233, liveSizePayload());
         request(235, liveCompressionPayload());
@@ -194,8 +195,9 @@ final class Gc1SocketClient implements Closeable {
         return value;
     }
 
-    static byte[] liveFrameRatePayload() { return ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 3000).array(); }
-    static byte[] liveSizePayload() { return new byte[]{1}; }
+    static byte[] liveStillModePayload() { return new byte[]{0}; }
+    static byte[] liveFrameRatePayload() { return ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 2400).array(); }
+    static byte[] liveSizePayload() { return new byte[]{2}; }
     static byte[] liveCompressionPayload() { return new byte[]{2}; }
     static boolean isLiveReadyEvent(int event) { return event == 0x4012; }
 

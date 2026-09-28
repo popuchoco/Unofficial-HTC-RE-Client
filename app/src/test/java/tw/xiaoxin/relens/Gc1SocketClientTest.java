@@ -56,8 +56,9 @@ public class Gc1SocketClientTest {
     }
 
     @Test public void encodesGc1LiveViewProfile() {
-        assertArrayEquals(new byte[]{(byte) 0xb8, 0x0b}, Gc1SocketClient.liveFrameRatePayload());
-        assertArrayEquals(new byte[]{1}, Gc1SocketClient.liveSizePayload());
+        assertArrayEquals(new byte[]{0}, Gc1SocketClient.liveStillModePayload());
+        assertArrayEquals(new byte[]{0x60, 0x09}, Gc1SocketClient.liveFrameRatePayload());
+        assertArrayEquals(new byte[]{2}, Gc1SocketClient.liveSizePayload());
         assertArrayEquals(new byte[]{2}, Gc1SocketClient.liveCompressionPayload());
     }
 

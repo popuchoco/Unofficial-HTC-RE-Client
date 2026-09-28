@@ -10,8 +10,9 @@
 - 在背景監看開啟、Activity 重建、BLE 斷線與連續點擊連線情境下，確認只有一個 GATT session、一次認證與一組 AE01/AE02 訂閱。
 - 連續重試 Wi-Fi bootstrap，確認 UDP 7777 無 `BindException`，舊 session 的 IP 不會覆蓋新 session。
 - GC1 405 分段下載必測第一包 1-byte status 計入 wire offset、後續包連續性、中斷後 socket 重建與斷點續傳。
-- A000 預覽嚴格驗證 `234(B8 0B)` → `233(01)` → `235(02)` → `130` 的操作順序，且在 event `0x4012` 前不得啟動播放器；空 URI 使用 `rtsp://<camera-ip>:8554/MJPEG_unicast`。預覽啟動中切頁、131 逾時與 Activity 重建不得阻擋相簿重新整理或讓舊 callback 寫入新頁面。
+- A000 拍照取景器嚴格驗證 `261(00)` → `234(60 09)` → `233(02)` → `235(02)` → `130` 的操作順序，且在 event `0x4012` 前不得啟動播放器；空 URI 使用 `rtsp://<camera-ip>:8554/MJPEG_unicast`。預覽啟動中切頁、131 逾時與 Activity 重建不得阻擋相簿重新整理或讓舊 callback 寫入新頁面。
 - Android 10+ 下載成功後，照片須出現在 `Pictures/RE Lens`、影片須出現在 `Movies/RE Lens`；傳輸失敗不得留下 pending MediaStore 項目。Android 8–9 驗證儲存權限與媒體掃描。
+- Samsung S21 實機已確認 MediaStore 照片下載成功並產生公開 Images URI；影片與 Android 8–9 路徑仍列入硬體矩陣。
 - 確認匯出 log 不含 SSID、passphrase、OAuth token 或 YouTube stream key。
 - YouTube 測試涵蓋取消授權、API 錯誤、建立並綁定、stream 未 active 時禁止 live、正常 complete。
 
