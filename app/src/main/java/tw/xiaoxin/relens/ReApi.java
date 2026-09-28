@@ -7,7 +7,7 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-final class ReApi {
+final class ReApi implements Closeable {
     interface Progress { void onProgress(long done, long total); }
     private final String base;
     private final Gc1SocketClient gc1;
@@ -22,6 +22,7 @@ final class ReApi {
     JSONObject serial() throws Exception { return json("GET", "/v1/system/serial_num", null); }
     String startLiveView() throws Exception { return gc1.startLiveView(); }
     void stopLiveView() throws Exception { gc1.stopLiveView(); }
+    @Override public void close() { gc1.close(); }
     void download(JSONObject item, File target, Progress progress) throws Exception {
         long existing = target.exists() ? target.length() : 0;
         long total = item.optLong("size", 0);

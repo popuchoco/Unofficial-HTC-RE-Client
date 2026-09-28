@@ -24,6 +24,10 @@ API 29+ 使用 `WifiP2pConfig.Builder` 建立自主 owner group 時，不能只�
 
 連線按鈕、Activity 重建與背景監看共用同一個連線管理器。只要 GATT 尚在連線或建立中，新的 connect 請求必須被拒絕；被替換的 GATT callback、重複 connected callback 與重複 service-discovery callback 不得重置狀態機或重跑認證。UDP 7777 接收器亦以 session generation 隔離，過期執行緒不得占用 port 或回填舊 IP。
 
+GC1 檔案通道的分段 wire offset 與實際寫入檔案的 byte count 必須分開計數：第一個 fragment 的 declared length 包含 1-byte status，因此寫入 32768 bytes 後，下一個 wire offset 為 32769。任一分段驗證失敗都必須關閉並重建 GC1 的 9000–9004 sockets，不得在含有殘留 frame 的 9003 socket 上繼續下一筆命令。
+
+Live view command `130` 回覆成功狀態但未附 URI 時，GC1 預覽位址使用 `rtsp://<camera-ip>/live`。切換頁籤時 command `131` 最多等待 3 秒；逾時即重建 GC1 session，不能長時間阻擋相簿或拍攝命令。
+
 Wi-Fi Direct group 建立前另有硬性前置條件：BLE 必須仍為 connected、RE 的短／長命令 characteristic 均已找到，而且狀態通知 CCCD 寫入成功。一般 BLE 周邊、無名廣播、尚未完成 service discovery 的裝置或已斷線的舊狀態，都不能進入 P2P 階段。
 
 ## 命令與資料格式

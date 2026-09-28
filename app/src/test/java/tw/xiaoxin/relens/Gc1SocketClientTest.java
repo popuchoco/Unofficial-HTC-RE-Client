@@ -40,4 +40,16 @@ public class Gc1SocketClientTest {
     public void rejectsEmptyMediaPage() {
         Gc1SocketClient.encodeMediaQuery(0, 0);
     }
+
+    @Test public void firstDownloadFragmentCountsStatusByteInWireOffset() {
+        assertEquals(32769L, Gc1SocketClient.nextFragmentWireOffset(0, 32769));
+        assertEquals(65537L, Gc1SocketClient.nextFragmentWireOffset(32769, 32768));
+    }
+
+    @Test public void statusOnlyLiveViewResponseUsesGc1Uri() throws Exception {
+        assertEquals("rtsp://192.168.49.74/live",
+                Gc1SocketClient.liveViewUri("192.168.49.74", new byte[0]));
+        assertEquals("rtsp://camera/custom", Gc1SocketClient.liveViewUri("ignored",
+                "rtsp://camera/custom\0".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
 }

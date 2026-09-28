@@ -81,14 +81,24 @@ final class Gc1SocketClient implements Closeable {
         requireSuccess(data, 130);
         byte[] uri = new byte[data.remaining()];
         data.get(uri);
-        String value = trimCString(uri);
-        if (!value.startsWith("rtsp://")) throw new IOException("GC1 未回傳有效 RTSP URI: " + value);
+        String value = liveViewUri(host, uri);
+        if (uri.length == 0) AppLog.i("GC1-RTSP", "Command 130 returned status only; using GC1 live URI");
         AppLog.i("GC1-RTSP", "Live view URI=" + value);
         return value;
     }
 
     synchronized void stopLiveView() throws Exception {
-        if (handshake != null) request(131, null);
+        if (handshake == null) return;
+        int previousTimeout = commandRx.getSoTimeout();
+        try {
+            commandRx.setSoTimeout(3_000);
+            request(131, null);
+        } catch (IOException timeout) {
+            close();
+            throw timeout;
+        } finally {
+            if (commandRx != null && !commandRx.isClosed()) commandRx.setSoTimeout(previousTimeout);
+        }
     }
 
     synchronized JSONArray media() throws Exception {
@@ -115,6 +125,8 @@ final class Gc1SocketClient implements Closeable {
     synchronized void download(int handle, long offset, long total, OutputStream output,
                                TransferProgress progress) throws Exception {
         ensureConnected();
+        boolean completed = false;
+        try {
         if (offset < 0 || offset > 0xffffffffL) throw new IOException("GC1 download offset 超出範圍");
         ByteBuffer body = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
                 .putInt(handle).putInt((int) offset);
@@ -132,15 +144,18 @@ final class Gc1SocketClient implements Closeable {
             payload.get(bytes); output.write(bytes); done += bytes.length; progress.onProgress(done, total);
         } else {
           boolean first = true;
+          long wireOffset = 0;
           while (true) {
-            int fragmentOffset = payload.getInt();
+            long fragmentOffset = Integer.toUnsignedLong(payload.getInt());
             int fragmentLength = payload.getInt();
-            if (fragmentOffset != done) throw new IOException("GC1 fragment offset 不連續: " + fragmentOffset + " != " + done);
+            int wireLength = fragmentLength;
+            if (fragmentOffset != wireOffset) throw new IOException("GC1 fragment offset 不連續: " + fragmentOffset + " != " + wireOffset);
             if (first) { requireSuccess(payload, 405); fragmentLength--; first = false; }
             if (fragmentLength < 0 || payload.remaining() != fragmentLength)
                 throw new IOException("GC1 fragment length 不符: " + fragmentLength + "/" + payload.remaining());
             byte[] bytes = new byte[fragmentLength]; payload.get(bytes); output.write(bytes);
             done += bytes.length; progress.onProgress(done, total);
+            wireOffset = nextFragmentWireOffset(wireOffset, wireLength);
             if ((frame.flags & 0x04000000) != 0) throw new IOException("GC1 已取消下載");
             if ((frame.flags & 0x02000000) == 0) break;
             frame = readFrame(input, 405, current);
@@ -149,6 +164,25 @@ final class Gc1SocketClient implements Closeable {
         }
         output.flush();
         AppLog.i("GC1-MEDIA", "Download completed handle=" + handle + " bytes=" + done);
+        completed = true;
+        } finally {
+            if (!completed) {
+                AppLog.w("GC1-MEDIA", "Resetting GC1 session after interrupted file transfer");
+                close();
+            }
+        }
+    }
+
+    static long nextFragmentWireOffset(long currentOffset, int declaredLength) {
+        if (declaredLength < 0) throw new IllegalArgumentException("negative fragment length");
+        return currentOffset + declaredLength;
+    }
+
+    static String liveViewUri(String host, byte[] responseUri) throws IOException {
+        String value = trimCString(responseUri);
+        if (value.isEmpty()) return "rtsp://" + host + "/live";
+        if (!value.startsWith("rtsp://")) throw new IOException("GC1 未回傳有效 RTSP URI: " + value);
+        return value;
     }
 
     private JSONObject mediaDetail(MediaSummary summary) throws Exception {
