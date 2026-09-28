@@ -4,7 +4,7 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前診斷版：`0.5.3`。A000 初始化在密碼驗證與 AE01/AE02 訂閱後，先讀取 Device Information `180A/2A26` 的 BLE firmware version；解析成功後才建立 Wi-Fi Direct group，並依 `BLE FW > 2250` 嚴格選擇新版或舊版 boot 分支。GATT session 會阻止重複連線與重複初始化；Android 10+ 則強制建立具完整 owner 憑證的 2.4 GHz Wi-Fi Direct group。GC1 相簿下載已分離 wire offset 與檔案 byte count，中斷傳輸會重建 socket session；RTSP command 130 只回狀態時使用 `rtsp://<camera-ip>/live`。
+> 目前診斷版：`0.5.4`。A000 初始化在密碼驗證與 AE01/AE02 訂閱後，先讀取 Device Information `180A/2A26` 的 BLE firmware version；解析成功後才建立 Wi-Fi Direct group，並依 `BLE FW > 2250` 嚴格選擇新版或舊版 boot 分支。GATT session 會阻止重複連線與重複初始化；Android 10+ 則強制建立具完整 owner 憑證的 2.4 GHz Wi-Fi Direct group。GC1 相簿下載已分離 wire offset 與檔案 byte count，中斷傳輸會重建 socket session；RTSP command 130 只回狀態時使用 `rtsp://<camera-ip>/live`，播放器會在相機串流服務尚未就緒時有限次重試並記錄完整錯誤原因。
 
 Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGroup()` 後會等待 owner group 的 SSID 與密碼真正可用，才啟動 BLE bootstrap。
 
@@ -34,6 +34,24 @@ RE 的區域網路 HTTP 端點需要 cleartext，相機流量因此保留 `usesC
 首次使用時，手機先透過 BLE 與 RE 建立控制通道，再建立 Wi-Fi Direct group。App 將 group 的 SSID 與 passphrase 經 GATT 依序送給 RE，RE 以 station 模式加入並回報 IPv4；GC1 控制、檔案下載與 RTSP 預覽再走此 IP 網路。
 
 詳細握手與佇列規則見 [BLE 與 Wi-Fi Direct 連線引導](docs/CONNECTION_BOOTSTRAP.md)。目前連線層已暫停試誤式發版；下一版必須先符合 [A000 連線流程稽核](docs/A000_CONNECTION_FLOW_AUDIT.md) 的狀態、分支、追蹤與測試閘門。
+
+## 連線異常與回報
+
+若 Android 偶發拒絕 GATT 操作、控制通道沒有完成訂閱，或 Wi-Fi bootstrap 沒有繼續，請保持 RE 開機且靠近手機，在「連線」頁再次按一次 Wi-Fi Direct 連線並等待流程完成；請勿快速連續點擊。若重試後仍無法恢復，請到「裝置」頁開啟偵錯、匯出操作 Log，並在 [GitHub Issues](https://github.com/popuchoco/Unofficial-HTC-RE-Client/issues/new) 附上：
+
+- RE Lens 版本、手機型號及 Android 版本。
+- 問題發生前的操作步驟與畫面訊息。
+- 匯出的 Log（送出前仍請確認不含自行輸入的密碼或其他個人資料）。
+
+## 相簿下載位置
+
+目前下載檔案存放在 App 專屬外部儲存空間的 `downloads` 目錄：
+
+```text
+/storage/emulated/0/Android/data/tw.xiaoxin.relens/files/downloads/
+```
+
+Android 11 以上可能限制一般檔案管理器直接開啟 `Android/data`；移除 App 時，此目錄及其中檔案也會一併刪除。後續版本會改用 MediaStore，讓檔案直接出現在系統相簿或下載項目。
 
 ## 文件
 

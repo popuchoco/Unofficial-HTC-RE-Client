@@ -10,7 +10,7 @@
 - 在背景監看開啟、Activity 重建、BLE 斷線與連續點擊連線情境下，確認只有一個 GATT session、一次認證與一組 AE01/AE02 訂閱。
 - 連續重試 Wi-Fi bootstrap，確認 UDP 7777 無 `BindException`，舊 session 的 IP 不會覆蓋新 session。
 - GC1 405 分段下載必測第一包 1-byte status 計入 wire offset、後續包連續性、中斷後 socket 重建與斷點續傳。
-- command 130 只回覆 status `00` 時使用 `rtsp://<camera-ip>/live`；在預覽啟動中切頁、131 逾時與 Activity 重建情境下，不得阻擋相簿重新整理或讓舊 callback 寫入新頁面。
+- command 130 只回覆 status `00` 時使用 `rtsp://<camera-ip>/live`；串流來源尚未就緒時以 0.5 秒遞增間隔重建播放器，最多五次，並將完整 cause chain 寫入 Log。預覽啟動中切頁、131 逾時與 Activity 重建不得阻擋相簿重新整理、觸發延遲重試或讓舊 callback 寫入新頁面。
 - 確認匯出 log 不含 SSID、passphrase、OAuth token 或 YouTube stream key。
 - YouTube 測試涵蓋取消授權、API 錯誤、建立並綁定、stream 未 active 時禁止 live、正常 complete。
 
