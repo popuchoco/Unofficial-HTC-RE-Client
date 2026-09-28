@@ -18,6 +18,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.wifi.WifiManager;
+import android.net.wifi.p2p.WifiP2pConfig;
 import android.net.wifi.p2p.WifiP2pGroup;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.os.Build;
@@ -27,6 +28,7 @@ import android.os.SystemClock;
 import java.nio.charset.StandardCharsets;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
@@ -109,6 +111,7 @@ final class ReConnectionManager {
     private WifiP2pGroup pendingGroup;
     private WifiP2pManager.Channel p2pChannel;
     private boolean reGattConnected;
+    private boolean connectionAttemptInFlight;
     private boolean notificationsReady;
     private boolean awaitingConfigStatus;
     private boolean p2pStartRequested;
@@ -140,6 +143,8 @@ final class ReConnectionManager {
     private String foundAddress;
     private String cameraPassword = "";
     private volatile DatagramSocket ipDiscoverySocket;
+    private final Object ipDiscoveryLock = new Object();
+    private volatile long ipDiscoveryGeneration;
 
     private final Runnable configTimeout = () -> {
         if (!awaitingConfigStatus) return;
@@ -309,13 +314,20 @@ final class ReConnectionManager {
     void connectFound() {
         if (foundAddress == null) { setBle("請先掃描裝置"); return; }
         if (!hasBluetoothPermission(Manifest.permission.BLUETOOTH_CONNECT)) { setBle("缺少藍牙連線權限"); return; }
+        if (connectionAttemptInFlight || gatt != null) {
+            AppLog.i("BLE", "Connect ignored: a GATT session is already active state=" + a000State);
+            return;
+        }
         BluetoothManager manager = context.getSystemService(BluetoothManager.class);
         BluetoothDevice device = manager.getAdapter().getRemoteDevice(foundAddress);
-        disconnect(false);
         setBle("正在連線");
         resetDiscoveryGate();
+        connectionAttemptInFlight = true;
         try { gatt = device.connectGatt(context, false, gattCallback); }
-        catch (SecurityException error) { setBle("缺少藍牙連線權限"); }
+        catch (SecurityException error) {
+            connectionAttemptInFlight = false;
+            setBle("缺少藍牙連線權限");
+        }
     }
 
     void disconnect() { disconnect(true); }
@@ -327,6 +339,7 @@ final class ReConnectionManager {
         commandQueue.cancel();
         awaitingConfigStatus = false;
         reGattConnected = false;
+        connectionAttemptInFlight = false;
         notificationsReady = false;
         shortCommand = null;
         longCommand = null;
@@ -376,10 +389,19 @@ final class ReConnectionManager {
         setP2p("正在檢查 Wi-Fi Direct 群組");
         try {
             manager.requestGroupInfo(p2pChannel, group -> {
+                int frequency = group != null && Build.VERSION.SDK_INT >= 29
+                        ? group.getFrequency() : 0;
                 if (group != null && P2pBootstrapPolicy.canReuseOwnerGroup(group.isGroupOwner(),
-                        group.getNetworkName(), group.getPassphrase())) {
+                        group.getNetworkName(), group.getPassphrase(), frequency)) {
                     AppLog.i("P2P", "Reusing existing owner group");
                     onP2pGroupReady(group);
+                    return;
+                }
+                if (group != null && group.isGroupOwner()
+                        && !P2pBootstrapPolicy.isGc1CompatibleFrequency(frequency)) {
+                    AppLog.w("P2P", "Removing incompatible owner group frequency="
+                            + frequency + " MHz before GC1 bootstrap");
+                    removeGroupThenCreate(manager, p2pChannel);
                     return;
                 }
                 createNewP2pGroup(manager, p2pChannel);
@@ -390,19 +412,47 @@ final class ReConnectionManager {
         }
     }
 
+    private void removeGroupThenCreate(WifiP2pManager manager,
+            WifiP2pManager.Channel channel) {
+        try {
+            manager.removeGroup(channel, new WifiP2pManager.ActionListener() {
+                @Override public void onSuccess() {
+                    createNewP2pGroup(manager, channel);
+                }
+                @Override public void onFailure(int reason) {
+                    p2pStartRequested = false;
+                    setP2p("無法移除不相容的 5 GHz 群組（" + reason + "）");
+                    AppLog.w("P2P", "removeGroup failed reason=" + reason);
+                }
+            });
+        } catch (SecurityException error) {
+            p2pStartRequested = false;
+            setP2p("缺少 Wi-Fi 權限");
+        }
+    }
+
     private void createNewP2pGroup(WifiP2pManager manager, WifiP2pManager.Channel channel) {
         setP2p("正在建立 Wi-Fi Direct 群組");
         try {
-            manager.createGroup(channel, new WifiP2pManager.ActionListener() {
+            WifiP2pManager.ActionListener listener = new WifiP2pManager.ActionListener() {
                 @Override public void onSuccess() {
-                    AppLog.i("P2P", "createGroup accepted; waiting for owner group details");
+                    AppLog.i("P2P", "createGroup accepted; requestedBand="
+                            + (Build.VERSION.SDK_INT >= 29 ? "2.4GHz" : "system default"));
                     requestCreatedGroupInfo(manager, channel, 1);
                 }
                 @Override public void onFailure(int reason) {
                     p2pStartRequested = false;
                     setP2p("建立失敗（" + reason + "）");
                 }
-            });
+            };
+            if (Build.VERSION.SDK_INT >= 29) {
+                WifiP2pConfig config = new WifiP2pConfig.Builder()
+                        .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
+                        .build();
+                manager.createGroup(channel, config, listener);
+            } else {
+                manager.createGroup(channel, listener);
+            }
         } catch (SecurityException error) {
             p2pStartRequested = false;
             setP2p("缺少 Wi-Fi 權限");
@@ -442,9 +492,16 @@ final class ReConnectionManager {
     }
 
     private void onP2pGroupReady(WifiP2pGroup group) {
+        int frequency = Build.VERSION.SDK_INT >= 29 ? group.getFrequency() : 0;
+        if (!P2pBootstrapPolicy.isGc1CompatibleFrequency(frequency)) {
+            pendingGroup = null;
+            p2pStartRequested = false;
+            setP2p("群組不相容（" + frequency + " MHz）");
+            AppLog.w("P2P", "Rejecting incompatible GC1 group frequency=" + frequency);
+            return;
+        }
         pendingGroup = group;
         p2pStartRequested = false;
-        int frequency = Build.VERSION.SDK_INT >= 29 ? group.getFrequency() : 0;
         setP2p("群組已建立" + (frequency > 0 ? " · " + frequency + " MHz" : ""));
         transition(A000ConnectionState.P2P_GROUP_READY, "owner group credentials ready");
         startWifiBootstrapIfReady();
@@ -461,6 +518,11 @@ final class ReConnectionManager {
                 return;
             }
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                connectionAttemptInFlight = false;
+                if (reGattConnected) {
+                    AppLog.i("BLE", "Ignoring duplicate connected callback state=" + a000State);
+                    return;
+                }
                 reGattConnected = true;
                 gattConnectedSignal = true;
                 transition(A000ConnectionState.GATT_CONNECTED, "GATT callback status=" + status);
@@ -470,6 +532,7 @@ final class ReConnectionManager {
                 main.removeCallbacks(serviceDiscoveryFallback);
                 main.postDelayed(serviceDiscoveryFallback, 3_000L);
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                connectionAttemptInFlight = false;
                 reGattConnected = false;
                 notificationsReady = false;
                 shortCommand = null;
@@ -487,11 +550,21 @@ final class ReConnectionManager {
                 commandQueue.cancel();
                 main.removeCallbacks(configTimeout);
                 awaitingConfigStatus = false;
+                try { current.close(); } catch (SecurityException ignored) { }
+                if (gatt == current) gatt = null;
                 ConnectionMonitorService.notifyDisconnect(context);
             }
         }
 
         @Override public void onServicesDiscovered(BluetoothGatt current, int status) {
+            if (current != gatt) {
+                AppLog.i("BLE", "Ignoring services callback from replaced GATT status=" + status);
+                return;
+            }
+            if (controlProfile != 0) {
+                AppLog.i("BLE", "Ignoring duplicate services callback profile=" + controlProfile);
+                return;
+            }
             if (status == BluetoothGatt.GATT_SUCCESS && current.getServices().isEmpty()
                     && GattDiscoveryGate.shouldRetryEmpty(emptyServiceDiscoveryRetries)) {
                 emptyServiceDiscoveryRetries++;
@@ -1356,19 +1429,29 @@ final class ReConnectionManager {
 
     private void startGc1IpDiscovery() {
         closeGc1IpDiscovery();
+        final long generation = ipDiscoveryGeneration;
         Thread receiver = new Thread(() -> {
             DatagramSocket socket = null;
             try {
-                socket = new DatagramSocket(7777);
-                ipDiscoverySocket = socket;
+                socket = new DatagramSocket(null);
                 socket.setReuseAddress(true);
+                socket.bind(new InetSocketAddress(7777));
+                synchronized (ipDiscoveryLock) {
+                    if (generation != ipDiscoveryGeneration) {
+                        socket.close();
+                        return;
+                    }
+                    ipDiscoverySocket = socket;
+                }
                 socket.setSoTimeout((int) CONFIG_TIMEOUT_MS);
                 AppLog.i("P2P", "Listening for first-generation RE IP on UDP 7777");
                 DatagramPacket packet = new DatagramPacket(new byte[1024], 1024);
                 socket.receive(packet);
                 String ip = packet.getAddress().getHostAddress();
                 AppLog.i("P2P", "UDP 7777 received RE IP=" + ip);
-                main.post(() -> finishGc1IpDiscovery(ip));
+                main.post(() -> {
+                    if (generation == ipDiscoveryGeneration) finishGc1IpDiscovery(ip);
+                });
             } catch (SocketTimeoutException timeout) {
                 AppLog.w("P2P", "UDP 7777 RE IP discovery timeout");
             } catch (Exception error) {
@@ -1378,7 +1461,9 @@ final class ReConnectionManager {
                 }
             } finally {
                 if (socket != null && !socket.isClosed()) socket.close();
-                if (ipDiscoverySocket == socket) ipDiscoverySocket = null;
+                synchronized (ipDiscoveryLock) {
+                    if (ipDiscoverySocket == socket) ipDiscoverySocket = null;
+                }
             }
         }, "re-ip-discovery");
         receiver.setDaemon(true);
@@ -1396,8 +1481,12 @@ final class ReConnectionManager {
     }
 
     private void closeGc1IpDiscovery() {
-        DatagramSocket socket = ipDiscoverySocket;
-        ipDiscoverySocket = null;
+        DatagramSocket socket;
+        synchronized (ipDiscoveryLock) {
+            ipDiscoveryGeneration++;
+            socket = ipDiscoverySocket;
+            ipDiscoverySocket = null;
+        }
         if (socket != null && !socket.isClosed()) socket.close();
     }
 

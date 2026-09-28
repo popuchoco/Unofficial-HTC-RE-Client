@@ -5,7 +5,9 @@
 - 單元測試確認第二個 GATT packet 在第一個 `onCharacteristicWrite` 前不得送出。
 - 單元測試確認 36-byte 長命令分成 17、18、1-byte payload 的三包，序號依序為首包、`0x02`、`0x04`。
 - 實機測試 CCCD callback 失敗、任一 characteristic write 失敗、60 秒設定逾時與 BLE 中途斷線。
-- 實機測試 2.4 GHz 與 5 GHz group，確認 band/channel byte 與 RE 回報 IPv4。
+- 實機確認 Android 10+ 只建立或沿用 2.4 GHz group；預先存在 5 GHz group 時必須移除並重建，不得將 5180 MHz 送給 RE。
+- 在背景監看開啟、Activity 重建、BLE 斷線與連續點擊連線情境下，確認只有一個 GATT session、一次認證與一組 AE01/AE02 訂閱。
+- 連續重試 Wi-Fi bootstrap，確認 UDP 7777 無 `BindException`，舊 session 的 IP 不會覆蓋新 session。
 - 確認匯出 log 不含 SSID、passphrase、OAuth token 或 YouTube stream key。
 - YouTube 測試涵蓋取消授權、API 錯誤、建立並綁定、stream 未 active 時禁止 live、正常 complete。
 

@@ -13,9 +13,17 @@ public class P2pBootstrapPolicyTest {
     }
 
     @Test public void reusesOnlyAnOwnerGroupWithCredentials() {
-        assertTrue(P2pBootstrapPolicy.canReuseOwnerGroup(true, "DIRECT-RE", "secret"));
-        assertFalse(P2pBootstrapPolicy.canReuseOwnerGroup(false, "DIRECT-RE", "secret"));
-        assertFalse(P2pBootstrapPolicy.canReuseOwnerGroup(true, "", "secret"));
-        assertFalse(P2pBootstrapPolicy.canReuseOwnerGroup(true, "DIRECT-RE", null));
+        assertTrue(P2pBootstrapPolicy.canReuseOwnerGroup(true, "DIRECT-RE", "secret", 2412));
+        assertFalse(P2pBootstrapPolicy.canReuseOwnerGroup(false, "DIRECT-RE", "secret", 2412));
+        assertFalse(P2pBootstrapPolicy.canReuseOwnerGroup(true, "", "secret", 2412));
+        assertFalse(P2pBootstrapPolicy.canReuseOwnerGroup(true, "DIRECT-RE", null, 2412));
+        assertFalse(P2pBootstrapPolicy.canReuseOwnerGroup(true, "DIRECT-RE", "secret", 5180));
+    }
+
+    @Test public void gc1AcceptsOnlyKnownTwoPointFourGhzGroups() {
+        assertTrue(P2pBootstrapPolicy.isGc1CompatibleFrequency(2412));
+        assertTrue(P2pBootstrapPolicy.isGc1CompatibleFrequency(2484));
+        assertTrue(P2pBootstrapPolicy.isGc1CompatibleFrequency(0));
+        assertFalse(P2pBootstrapPolicy.isGc1CompatibleFrequency(5180));
     }
 }
