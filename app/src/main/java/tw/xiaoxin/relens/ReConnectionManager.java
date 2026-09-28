@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
+import java.security.SecureRandom;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -86,7 +87,7 @@ final class ReConnectionManager {
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
-    private final Random random = new Random();
+    private final Random random = new SecureRandom();
     private final GattCommandQueue commandQueue;
     private BluetoothLeScanner scanner;
     private ScanCallback scanCallback;
@@ -447,6 +448,8 @@ final class ReConnectionManager {
             };
             if (Build.VERSION.SDK_INT >= 29) {
                 WifiP2pConfig config = new WifiP2pConfig.Builder()
+                        .setNetworkName(P2pBootstrapPolicy.createGroupNetworkName(random))
+                        .setPassphrase(P2pBootstrapPolicy.createGroupPassphrase(random))
                         .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
                         .build();
                 manager.createGroup(channel, config, listener);
@@ -456,6 +459,10 @@ final class ReConnectionManager {
         } catch (SecurityException error) {
             p2pStartRequested = false;
             setP2p("缺少 Wi-Fi 權限");
+        } catch (IllegalArgumentException | IllegalStateException error) {
+            p2pStartRequested = false;
+            setP2p("Wi-Fi Direct 群組設定無效");
+            AppLog.w("P2P", "Group config rejected=" + error.getClass().getSimpleName());
         }
     }
 

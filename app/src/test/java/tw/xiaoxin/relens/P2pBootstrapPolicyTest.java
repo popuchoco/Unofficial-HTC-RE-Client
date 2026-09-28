@@ -4,6 +4,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
+import java.util.Random;
 
 public class P2pBootstrapPolicyTest {
     @Test public void startsAutomaticallyOnlyWithoutAnActiveRequestOrGroup() {
@@ -25,5 +26,15 @@ public class P2pBootstrapPolicyTest {
         assertTrue(P2pBootstrapPolicy.isGc1CompatibleFrequency(2484));
         assertTrue(P2pBootstrapPolicy.isGc1CompatibleFrequency(0));
         assertFalse(P2pBootstrapPolicy.isGc1CompatibleFrequency(5180));
+    }
+
+    @Test public void generatedOwnerCredentialsMeetWifiP2pBuilderRules() {
+        Random random = new Random(1234L);
+        String networkName = P2pBootstrapPolicy.createGroupNetworkName(random);
+        String passphrase = P2pBootstrapPolicy.createGroupPassphrase(random);
+
+        assertTrue(networkName.matches("DIRECT-[A-Za-z0-9]{2}-RE-Lens"));
+        assertTrue(passphrase.matches("[A-Za-z0-9]{16}"));
+        assertTrue(passphrase.length() >= 8 && passphrase.length() <= 63);
     }
 }

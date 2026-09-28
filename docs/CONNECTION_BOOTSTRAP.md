@@ -4,6 +4,8 @@ HTC RE 第一次啟動時，手機先透過 BLE 建立控制通道。手機建�
 
 實機記錄顯示 GC1 在 2412 MHz 可完成 station 加入，但在 5180 MHz 連續回報 `A304 status=26`。Android 10（API 29）以上因此必須以公開 API 指定 2.4 GHz group；已存在的 5 GHz owner group 不得沿用，需先移除再重建。API 26–28 無公開頻帶指定 API，保留系統預設建立路徑並必須在實機確認頻率。
 
+API 29+ 使用 `WifiP2pConfig.Builder` 建立自主 owner group 時，不能只設定頻帶；必須同時提供符合 `DIRECT-xy` 規則的 network name 與 8–63 字元 passphrase。App 每次建群時以 `SecureRandom` 產生新憑證，只將系統建群後回報的憑證透過 GATT 傳給 RE，不寫入 log。Builder 參數若遭 Android 拒絕，必須回報可讀錯誤而不得使 App 閃退。
+
 連線層會在 service discovery 後自動辨識兩種控制 profile：第一代硬體使用 `A000` service 與 `A201/A301/A302/A303/A304` characteristics；另一版使用 `5678` service 與 `CF01/CF02` 命令通道。兩者的長資料分段格式不同，不可混用。
 
 ## 必須遵守的寫入順序
