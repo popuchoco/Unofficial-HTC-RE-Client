@@ -289,8 +289,8 @@ final class Gc1SocketClient implements Closeable {
             commandTx = open(9000, 0);
             commandRx = open(9001, COMMAND_TIMEOUT_MS);
             eventRx = open(9002, 5500);
-            fileRx = open(9003, 0);
-            thumbnailRx = open(9004, 0);
+            fileRx = open(9003, COMMAND_TIMEOUT_MS);
+            thumbnailRx = open(9004, COMMAND_TIMEOUT_MS);
             tx = commandTx.getOutputStream();
             rx = commandRx.getInputStream();
             sequence = 0;

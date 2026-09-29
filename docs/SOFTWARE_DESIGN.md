@@ -10,7 +10,7 @@
 | `YouTubeLiveClient` | YouTube Live broadcast、stream、bind 與 transition 控制面 |
 | `MediaRelay`（規劃） | RE RTSP／媒體片段至 YouTube RTMP 的媒體面 |
 
-連線狀態機詳見 [CONNECTION_BOOTSTRAP.md](CONNECTION_BOOTSTRAP.md)，直播界線詳見 [YOUTUBE_LIVE.md](YOUTUBE_LIVE.md)。
+使用者操作見 [CONNECTION_GUIDE.md](CONNECTION_GUIDE.md)，連線狀態機詳見 [CONNECTION_BOOTSTRAP.md](CONNECTION_BOOTSTRAP.md)，Code Review 決策見 [CODE_REVIEW_RESPONSE.md](CODE_REVIEW_RESPONSE.md)，直播界線詳見 [YOUTUBE_LIVE.md](YOUTUBE_LIVE.md)。
 
 ## 系統脈絡
 

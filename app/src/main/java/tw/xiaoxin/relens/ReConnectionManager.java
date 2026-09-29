@@ -175,7 +175,12 @@ final class ReConnectionManager {
         this.context = context;
         IntentFilter bondFilter = new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
         bondFilter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
-        context.registerReceiver(bondReceiver, bondFilter);
+        if (Build.VERSION.SDK_INT >= 33) {
+            // Bluetooth broadcasts originate from a highly privileged system app.
+            context.registerReceiver(bondReceiver, bondFilter, Context.RECEIVER_EXPORTED);
+        } else {
+            context.registerReceiver(bondReceiver, bondFilter);
+        }
         commandQueue = new GattCommandQueue(this::writeGattPacket, new GattCommandQueue.Listener() {
             @Override public void onProgress(String label, int remaining) {
                 setP2p(label + "（尚有 " + remaining + " 個封包）");
@@ -324,7 +329,10 @@ final class ReConnectionManager {
         setBle("正在連線");
         resetDiscoveryGate();
         connectionAttemptInFlight = true;
-        try { gatt = device.connectGatt(context, false, gattCallback); }
+        try {
+            gatt = device.connectGatt(context, false, gattCallback,
+                    BluetoothDevice.TRANSPORT_LE, BluetoothDevice.PHY_LE_1M_MASK, main);
+        }
         catch (SecurityException error) {
             connectionAttemptInFlight = false;
             setBle("缺少藍牙連線權限");
@@ -363,8 +371,18 @@ final class ReConnectionManager {
         notificationSubscriptionAttempts = 0;
         multiplexSubscriptionAttempts = 0;
         if (gatt != null) {
-            try { gatt.disconnect(); gatt.close(); } catch (SecurityException ignored) { }
-            gatt = null;
+            BluetoothGatt closing = gatt;
+            try {
+                closing.disconnect();
+                main.postDelayed(() -> {
+                    if (gatt != closing) return;
+                    try { closing.close(); } catch (SecurityException ignored) { }
+                    gatt = null;
+                }, 5_000L);
+            } catch (SecurityException ignored) {
+                try { closing.close(); } catch (SecurityException ignoredAgain) { }
+                if (gatt == closing) gatt = null;
+            }
         }
         if (updateState) setBle("未連線");
     }
@@ -866,6 +884,18 @@ final class ReConnectionManager {
                 return;
             }
             handleStatusNotification(id, value);
+        }
+
+        @Override public void onCharacteristicRead(BluetoothGatt current,
+                BluetoothGattCharacteristic characteristic, byte[] value, int status) {
+            characteristic.setValue(value);
+            onCharacteristicRead(current, characteristic, status);
+        }
+
+        @Override public void onCharacteristicChanged(BluetoothGatt current,
+                BluetoothGattCharacteristic characteristic, byte[] value) {
+            characteristic.setValue(value);
+            onCharacteristicChanged(current, characteristic);
         }
     };
 

@@ -28,15 +28,15 @@ A000／GC1 在取得相機 IP 後使用五條 TCP 通道：`9000` 命令送出�
 | 啟動／停止即時預覽 | TCP + RTSP | 控制流程及 `0x4012` 已驗證；影音為 RTP/JPEG payload type 26 | 未來功能：待相容 decoder |
 | 媒體清單 | TCP | command `401`，每筆 9 bytes | 已實作，待硬體驗證 |
 | 媒體詳細資料 | TCP | command `404`，payload=handle | 已實作，待硬體驗證 |
-| 刪除媒體 | TCP | command `408`，payload=一或多個 LE handle，最後接 `00000000` | 已實作，待硬體驗證 |
+| 刪除媒體 | TCP | command `408`，payload=一或多個 LE handle，最後接 `00000000` | 已完成實機驗證 |
 | 儲存空間 | TCP | command `213`，回傳各模式剩餘數量、free bytes、total bytes | 已實作，待硬體驗證 |
-| 原檔續傳 | TCP `9003` | command `405`，payload=handle+offset | 已實作，待硬體驗證 |
+| 原檔分段下載 | TCP `9003` | command `405`，payload=handle+offset | 照片與影片已完成實機驗證 |
 
 縮圖 command `403`／`9004` 尚未接入畫面；相簿目前先顯示檔名、類型及大小。任何 A000 功能都不使用 `3000/v1` 路徑。
 
 ## 分段傳輸
 
-下載器在目標檔案已存在時，將現有長度放入 command `405` 的 offset。每個 fragment 都核對 sequence、offset 與宣告長度；相機回報取消旗標或 offset 不連續時立即停止，並保留檔案供下次續傳。
+GC1 `405` 支援 offset，每個 fragment 都核對 sequence、offset 與宣告長度；相機回報取消旗標或 offset 不連續時立即停止。現行 MediaStore sink 會在失敗時刪除 pending 項目，重新操作會由頭下載，因此尚不提供跨工作階段斷點續傳。
 
 ## 待完成的 BLE 狀態機
 
