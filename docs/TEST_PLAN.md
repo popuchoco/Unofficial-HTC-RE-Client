@@ -1,10 +1,11 @@
 # 測試計畫
 
-文件狀態：已依 RE Lens `0.6.1` 更新；「已驗證」僅代表目前 Samsung S21 5G+／RE 組合，不代表完整 Android 矩陣。
+文件狀態：已依 RE Lens `0.6.2` 更新；「已驗證」僅代表目前 Samsung S21 5G+／RE 組合，不代表完整 Android 矩陣。
 
 ## 目前回歸項目
 
 - 單元測試確認第二個 GATT packet 在第一個 `onCharacteristicWrite` 前不得送出。
+- 單元測試確認 A101 ready 早於 A107 callback 時不得完成 boot；A107 回讀成功前不得送出 A201。
 - 單元測試確認 36-byte 長命令分成 17、18、1-byte payload 的三包，序號依序為首包、`0x02`、`0x04`。
 - 實機測試 CCCD callback 失敗、任一 characteristic write 失敗、60 秒設定逾時與 BLE 中途斷線。
 - 實機確認 Android 10+ 只建立或沿用 2.4 GHz group；預先存在 5 GHz group 時必須移除並重建，不得將 5180 MHz 送給 RE。

@@ -27,4 +27,8 @@ final class Gc1BootProtocol {
     static long timeoutMs(int bleFirmwareVersion) {
         return branch(bleFirmwareVersion) == Branch.NEW_FW ? 3_000L : 2_500L;
     }
+
+    static boolean canCompleteWake(boolean readyObserved, boolean echoVerified) {
+        return readyObserved && echoVerified;
+    }
 }

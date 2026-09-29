@@ -1,6 +1,8 @@
 package tw.xiaoxin.relens;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -26,5 +28,12 @@ public class Gc1BootProtocolTest {
     @Test(expected = IllegalArgumentException.class)
     public void unknownFirmwareCannotSelectABranch() {
         Gc1BootProtocol.branch(-1);
+    }
+
+    @Test public void wakeCannotCompleteUntilReadyEventAndA107EchoAreBothObserved() {
+        assertFalse(Gc1BootProtocol.canCompleteWake(false, false));
+        assertFalse(Gc1BootProtocol.canCompleteWake(true, false));
+        assertFalse(Gc1BootProtocol.canCompleteWake(false, true));
+        assertTrue(Gc1BootProtocol.canCompleteWake(true, true));
     }
 }

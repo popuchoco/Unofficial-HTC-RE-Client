@@ -4,7 +4,7 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前版本：`0.6.1`。介面採用連線 dashboard、Material 3 底部導航與人性化裝置資訊。GC1 相簿支援 MediaStore 下載及確認後刪除 RE 原檔；裝置頁可讀取韌體版本與 microSD 可用／總容量。RE 的 RTSP 採 RTP/JPEG payload type 26，現有 Media3 無法解碼，因此即時預覽暫列未來功能，拍照與錄影控制不受影響。
+> 目前版本：`0.6.2`。修正 A101 ready 事件早於 A107 write callback 時，Wi-Fi bootstrap 過早插入 GATT 操作的競態；現在必須完成 A107 回讀並遵守 1.5 秒節流才會送出 A201。介面採用連線 dashboard、Material 3 底部導航與人性化裝置資訊；相簿支援 MediaStore 下載及確認後刪除 RE 原檔。
 
 Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGroup()` 後會等待 owner group 的 SSID 與密碼真正可用，才啟動 BLE bootstrap。
 

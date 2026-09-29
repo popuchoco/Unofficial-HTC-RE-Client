@@ -1,6 +1,6 @@
 # A000 連線流程稽核
 
-文件狀態：已於 `0.6.1` 重新核對。以下流程已落入現行程式，且 BLE 認證、AE01／AE02、2A26、boot、Wi‑Fi bootstrap、IP 回報及 GC1 `501` 握手已有實機成功記錄。本文保留 0.4.x 的差異表作為歷史稽核，不代表目前版本仍停在診斷階段。
+文件狀態：已於 `0.6.2` 重新核對。以下流程已落入現行程式，且 BLE 認證、AE01／AE02、2A26、boot、Wi‑Fi bootstrap、IP 回報及 GC1 `501` 握手已有實機成功記錄。本文保留 0.4.x 的差異表作為歷史稽核，不代表目前版本仍停在診斷階段。
 
 ## 稽核結論
 
@@ -99,6 +99,7 @@ A301/A302 的 GC1 fragmentation：每片最多 18 bytes payload；byte 0=`payloa
 - 參考 queue 在一次裝置操作開始後，將同裝置下一次可操作時間設在約 1500 ms 之後；這是流程的一部分，不等同於任意 timeout。
 - 長 frame 的每個 fragment 亦受同一 queue 管理。
 - waiter 必須在可能觸發事件的 write 之前註冊。
+- A101 ready 即使先於 A107 write callback 到達，也只能記錄為已觀察；必須等 A107 write callback、節流後 readback=`01`，才可完成 boot 並排入 A201。
 - retry 是重做完整 transaction，不是在同一個 in-flight 操作上並行補寫。
 
 ## Wi-Fi station retry 矩陣

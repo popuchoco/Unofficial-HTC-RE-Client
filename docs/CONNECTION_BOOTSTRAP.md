@@ -1,6 +1,6 @@
 # BLE 與 Wi-Fi Direct 連線引導
 
-文件狀態：已依 `0.6.1` 程式與實機成功 Log 核對。
+文件狀態：已依 `0.6.2` 程式與實機 Log 核對。
 
 HTC RE 第一次啟動時，手機先透過 BLE 建立控制通道。手機建立 Wi-Fi Direct group 後，將該 group 的 SSID 與 passphrase 經由 GATT 傳給 RE；RE 再以 station 模式加入 group，成功後由 BLE 通知或 UDP 7777 回報相機 IPv4 位址。後續 GC1、檔案下載與 RTSP 都使用這條 IP 網路。
 
@@ -15,7 +15,7 @@ API 29+ 使用 `WifiP2pConfig.Builder` 建立自主 owner group 時，不能只�
 1. 建立 BLE GATT 連線；等待 ACL／GATT 穩定後探索服務，必要時完成 bonding。現行程式不依賴隱藏的 GATT cache refresh API。
 2. 註冊 Wi-Fi 設定狀態 characteristic；第一代 `A000` 先依序訂閱 `AE01/AE02` multiplex notification，兩筆 CCCD callback 成功後才視為控制通道就緒；multiplex event 再映射回 `A101/A304`。
 3. 建立或取得相容的 Wi-Fi Direct owner group，取得 SSID、passphrase 與頻率；既有 5 GHz group 必須移除重建。
-4. 讀取標準 `2A26` BLE FW，依 `> 2250` 或 `<= 2250` 嚴格選擇單一 boot 分支；詳細順序見 [A000 連線流程稽核](A000_CONNECTION_FLOW_AUDIT.md)。boot ready 後才寫入國別與頻段。
+4. 讀取標準 `2A26` BLE FW，依 `> 2250` 或 `<= 2250` 嚴格選擇單一 boot 分支；詳細順序見 [A000 連線流程稽核](A000_CONNECTION_FLOW_AUDIT.md)。A101 ready 與 A107 write／readback 都完成後，仍須節流 1.5 秒才可寫入國別與頻段。
 5. 寫入 SSID；若超過單包大小則依序分段。
 6. 每一段都等待 `onCharacteristicWrite` 成功，才寫下一段。
 7. 寫入 passphrase，規則同上。

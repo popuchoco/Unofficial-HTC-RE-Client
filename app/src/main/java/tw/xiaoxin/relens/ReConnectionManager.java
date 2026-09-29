@@ -124,6 +124,8 @@ final class ReConnectionManager {
     private int pendingPasswordResult = -1;
     private String pendingNewPassword;
     private boolean bootWakeInFlight;
+    private boolean bootReadyObserved;
+    private boolean bootWakeEchoVerified;
     private int bootWakeAttempts;
     private boolean bootPreparationComplete;
     private boolean firmwareReadInFlight;
@@ -365,6 +367,8 @@ final class ReConnectionManager {
         pendingPasswordResult = -1;
         pendingNewPassword = null;
         bootWakeInFlight = false;
+        bootReadyObserved = false;
+        bootWakeEchoVerified = false;
         bootPreparationComplete = false;
         resetDiscoveryGate();
         pendingNotificationCharacteristic = null;
@@ -748,7 +752,6 @@ final class ReConnectionManager {
                     AppLog.w("BLE", "Boot wake write failed status=" + status);
                     return;
                 }
-                if (bootPreparationComplete) return;
                 AppLog.i("BLE", "RE wake command accepted; waiting for A101 ready event=17");
                 trace("WRITE_CALLBACK", GC1_BOOT_COMMAND, characteristic.getValue(),
                         "status=" + status + " throttleMs=" + GC1_GATT_THROTTLE_MS);
@@ -797,7 +800,10 @@ final class ReConnectionManager {
                     bootWakeInFlight = false;
                     transition(A000ConnectionState.ERROR, "A107 echo mismatch");
                     setP2p("RE 喚醒命令回讀不一致，已停止本次流程");
+                    return;
                 }
+                bootWakeEchoVerified = true;
+                completeGc1WakeIfReady("A107 echo verified");
                 return;
             }
             if (!GC1_BOOT_READY.equals(characteristic.getUuid())) return;
@@ -835,12 +841,12 @@ final class ReConnectionManager {
                     + (value == null ? 0 : value.length) + " first="
                     + (value == null || value.length == 0 ? -1 : value[0] & 0xff));
             if (ready) {
-                main.removeCallbacks(bootTimeout);
-                bootWakeInFlight = false;
-                bootWakeAttempts = 0;
-                bootPreparationComplete = true;
-                transition(A000ConnectionState.BOOT_READY, "A101 read ready");
-                main.postDelayed(ReConnectionManager.this::startWifiBootstrapIfReady, 1500L);
+                if (bootWakeInFlight) {
+                    bootReadyObserved = true;
+                    completeGc1WakeIfReady("A101 read ready");
+                } else {
+                    completeGc1BootWithoutWake("A101 read already ready");
+                }
                 return;
             }
             if (bootWakeAttempts >= BOOT_MAX_ATTEMPTS) {
@@ -1310,6 +1316,8 @@ final class ReConnectionManager {
             return;
         }
         bootWakeInFlight = true;
+        bootReadyObserved = false;
+        bootWakeEchoVerified = false;
         bootWakeAttempts++;
         transition(A000ConnectionState.BOOT_WAITING, "A101 waiter armed attempt=" + bootWakeAttempts);
         setP2p("RE 處於待機，正在喚醒");
@@ -1344,6 +1352,36 @@ final class ReConnectionManager {
         } catch (SecurityException error) {
             AppLog.w("BLE", "A107 read-back permission denied");
         }
+    }
+
+    private void completeGc1WakeIfReady(String source) {
+        if (!bootWakeInFlight || bootPreparationComplete
+                || !Gc1BootProtocol.canCompleteWake(bootReadyObserved, bootWakeEchoVerified)) {
+            AppLog.i("BLE", "Boot completion gated source=" + source
+                    + " readyObserved=" + bootReadyObserved
+                    + " echoVerified=" + bootWakeEchoVerified);
+            return;
+        }
+        main.removeCallbacks(bootTimeout);
+        bootWakeInFlight = false;
+        bootWakeAttempts = 0;
+        bootPreparationComplete = true;
+        transition(A000ConnectionState.BOOT_READY,
+                "A101 ready and A107 echo verified source=" + source);
+        setP2p("RE 已啟動，正在傳送 Wi-Fi 設定");
+        main.postDelayed(this::startWifiBootstrapIfReady, GC1_GATT_THROTTLE_MS);
+    }
+
+    private void completeGc1BootWithoutWake(String source) {
+        main.removeCallbacks(bootTimeout);
+        bootWakeInFlight = false;
+        bootWakeAttempts = 0;
+        bootReadyObserved = true;
+        bootWakeEchoVerified = true;
+        bootPreparationComplete = true;
+        transition(A000ConnectionState.BOOT_READY, source);
+        setP2p("RE 已啟動，正在傳送 Wi-Fi 設定");
+        main.postDelayed(this::startWifiBootstrapIfReady, GC1_GATT_THROTTLE_MS);
     }
 
     private void startP2pAutomatically() {
@@ -1413,14 +1451,10 @@ final class ReConnectionManager {
         }
         if (controlProfile == 1 && GC1_BOOT_READY.equals(characteristicId)) {
             if (Gc1BootState.isReady(value)) {
-                main.removeCallbacks(bootTimeout);
-                bootWakeInFlight = false;
-                bootWakeAttempts = 0;
-                bootPreparationComplete = true;
-                transition(A000ConnectionState.BOOT_READY, "A101 event ready");
-                AppLog.i("BLE", "RE A101 boot-ready bit received");
-                setP2p("RE 已啟動，正在傳送 Wi-Fi 設定");
-                startWifiBootstrapIfReady();
+                bootReadyObserved = true;
+                AppLog.i("BLE", "RE A101 boot-ready bit received; waiting for A107 echo="
+                        + !bootWakeEchoVerified);
+                completeGc1WakeIfReady("A101 event ready");
             } else {
                 AppLog.w("BLE", "A101 event not ready length="
                         + (value == null ? 0 : value.length) + " first="
@@ -1566,6 +1600,8 @@ final class ReConnectionManager {
         securityProbeInFlight = false;
         resetPasswordOperation();
         bootWakeInFlight = false;
+        bootReadyObserved = false;
+        bootWakeEchoVerified = false;
         bootWakeAttempts = 0;
         bootPreparationComplete = false;
         firmwareReadInFlight = false;
