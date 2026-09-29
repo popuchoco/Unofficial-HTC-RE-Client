@@ -27,7 +27,7 @@ Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGrou
 
 target 32 是目前的相容性決策：支援 Android 12+ 的 `BLUETOOTH_SCAN`／`BLUETOOTH_CONNECT` 權限模型，同時暫不切入 target 33+ 的 `NEARBY_WIFI_DEVICES` 路徑。compileSdk 35 讓程式可使用新版 SDK 編譯；升級 target 前必須完成 HTC RE 實機矩陣。
 
-RE 的區域網路 HTTP 端點需要 cleartext，相機流量因此保留 `usesCleartextTraffic=true`。YouTube API 仍使用 HTTPS。
+為相容其他相機 profile 的區域 HTTP，Manifest 保留 `usesCleartextTraffic=true`；目前 A000 的已驗證拍攝、裝置與相簿功能實際走 GC1 socket。YouTube API 一律使用 HTTPS。
 
 ## 連線方式
 
@@ -56,6 +56,7 @@ Movies/RE Lens/
 
 ## 文件
 
+- [文件索引與狀態](docs/README.md)
 - [產品規格](docs/SPECIFICATION.md)
 - [軟體設計](docs/SOFTWARE_DESIGN.md)
 - [架構決策](docs/DECISIONS.md)

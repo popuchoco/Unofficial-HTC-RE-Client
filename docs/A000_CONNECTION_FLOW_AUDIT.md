@@ -1,16 +1,16 @@
 # A000 連線流程稽核
 
-狀態：2026-09-27 已在 `0.4.20` 診斷版實作 2A26 版本讀取、互斥 boot 分支、A000 狀態／transaction trace，以及 Wi-Fi GATT write callback 後 1.5 秒節流；單元測試覆蓋版本門檻、兩條 boot operation order 與 queue 節流。實機 transaction trace 尚待驗證，因此本版仍屬診斷版。
+文件狀態：已於 `0.6.1` 重新核對。以下流程已落入現行程式，且 BLE 認證、AE01／AE02、2A26、boot、Wi‑Fi bootstrap、IP 回報及 GC1 `501` 握手已有實機成功記錄。本文保留 0.4.x 的差異表作為歷史稽核，不代表目前版本仍停在診斷階段。
 
 ## 稽核結論
 
-目前 `0.4.19` 已能完成 BLE 掃描、GATT 連線、A105/A106 密碼驗證及 AE01/AE02 訂閱，但初始化流程尚未忠實重現 A000 狀態機：
+0.4.19 時的稽核曾發現以下差異；`0.4.20` 之後已依此收斂為現行基準：
 
 1. 啟動分支使用的是 **BLE firmware version**，來源是標準 Device Information service `180A` 的 Firmware Revision String `2A26`，不是 A108 內的 Boot code version。
 2. 參考流程在密碼驗證成功後先啟用 AE01/AE02，再讀取 `2A26` 並寫入裝置模型；後續 boot callable 才能依 `BLE FW > 2250` 選定唯一分支。
 3. `BLE FW > 2250` 分支不先讀 A101，而是先建立 A101 waiter，再寫入 A107=`01`。
 4. `BLE FW <= 2250` 分支才先讀 A101；只有 bit 0 為 0 時才建立 waiter 並寫入 A107=`01`。
-5. 底層 GATT queue 嚴格單工，必須等待 callback 才處理下一筆，並在裝置操作之間保留約 1.5 秒節流。現行 App 只有 callback serialization，沒有等價節流。
+5. 底層 GATT queue 嚴格單工，必須等待 callback 才處理下一筆，並在裝置操作之間保留約 1.5 秒節流；現行 App 已實作此規則。
 6. `0.4.19` 是兩個 boot 分支的混合版本，因此不能再把它的 A101=`00` 結果視為忠實執行任一參考分支的證明。
 
 ## 裝置模型與版本來源
@@ -41,8 +41,8 @@
 | `P2P_GROUP_READY` | group 已建立 | 呼叫 boot task | 嚴格依下表選一條分支 | `BOOT_WAITING` 或 `BOOT_READY` | 不允許混合分支 |
 | `BOOT_READY` | A101 bit 0=1 | 開始 station task | boot task result=0 | `WIFI_BOOTSTRAP` | 最多五次完整 boot attempt |
 | `WIFI_BOOTSTRAP` | P2P group 存在且 boot ready | A201 → A301 → A302；先建立 A304 waiter，再送 A303 | 每次 write callback 成功；A303 另需 readback 相等 | `IP_WAITING` | 任一步失敗即中止本次 attempt |
-| `IP_WAITING` | A303 已接受 | 並行等待 A304 與 UDP/7777 | 任一路徑先取得成功結果與 IPv4 | `IP_READY` | 20 秒 timeout；依 BLE FW 選擇下一組 retry 參數 |
-| `IP_READY` | camera IPv4 已知 | 將 HTTP/RTSP 綁定到 Wi-Fi Direct network | HTTP health probe 成功 | `CONTROL_READY` | 保留 BLE，報告網路層錯誤 |
+| `IP_WAITING` | A303 已接受 | 並行等待 A304 與 UDP/7777 | 任一路徑先取得成功結果與 IPv4 | `IP_READY` | 現行 timeout 60 秒；失敗後由使用者重試連線 |
+| `IP_READY` | camera IPv4 已知 | 按功能建立 GC1 `9000`–`9004` socket | command `501` 握手成功 | GC1 控制可用 | 保留 BLE，個別操作回報 socket／協議錯誤 |
 
 ## Boot 的互斥分支
 
@@ -123,14 +123,13 @@ station task 最多三個外層 attempt；失敗後會移除 P2P group，再依 
 | 初始化 | 驗證後只啟用必要通知 | 還會讀 BLE FW，並排入時間／版本／長期事件初始化 | device model 不完整 |
 | station retry | 單一路徑 | 依 BLE FW 與結果調整參數並重建 group | 失敗恢復行為不同 |
 
-## 實作前的必要工作
+## 稽核項目的完成狀態
 
-1. 新增明確的 `A000ConnectionState`，禁止以多個鬆散 boolean 代表同一狀態。
-2. 將 `2A26` 列為 A000 必要 characteristic；解析失敗時停止，不猜版本。
-3. 把 read、write、descriptor write、waiter 全部納入同一 transaction queue，並加入可測試的 1500 ms device throttle。
-4. 分別實作並單元測試 `NEW_FW_BOOT` 與 `LEGACY_FW_BOOT`；兩者不得共用會改變順序的 fallback。
-5. 先以 dry-run trace 測試狀態與 frame，再改實機流程。
-6. 每筆診斷記錄統一輸出：transaction ID、state before/after、operation、UUID、payload hex（敏感值遮蔽）、callback type、status、elapsed ms、retry/branch。
+1. `A000ConnectionState`、2A26 強制讀取及互斥 boot 分支：已完成。
+2. Wi‑Fi credential write queue 的 callback serialization 與 1500 ms throttle：已完成並有單元測試。
+3. transaction trace：已完成；敏感憑證不輸出。
+4. BLE／P2P／IP／GC1 端到端流程：已由實機 Log 驗證。
+5. read、descriptor write 與事件 waiter 尚未全部抽象成單一通用 queue；目前以主 Looper、明確 callback 鏈及狀態 gate 序列化。這是後續重構項目，不是已知的連線阻斷問題。
 
 ## HCI／GATT 動態比對門檻
 
@@ -147,12 +146,13 @@ station task 最多三個外層 attempt；失敗後會移除 P2P group，再依 
 
 動態 trace 必須去除 MAC、SSID、passphrase 等識別或憑證資料後才能納入 issue／文件。
 
-## 發版閘門
+## 持續回歸閘門
 
-下一個連線版本只有在以下條件全部成立後才建立：
+任何後續連線層變更都必須維持：
 
 - 稽核表中的必要狀態已在程式中明確表示。
 - 2A26 已成功讀取，Log 能顯示實際 branch，但不洩漏憑證。
 - 單元測試能證明兩個 boot 分支的 operation order。
 - queue 測試能證明 callback 前不前進，且符合 device throttle。
 - 實機 Log 能逐列對應本文件的 transaction trace。
+- 不得因 UI、相簿或串流功能改動而重排已驗證的 A105/A106、AE01/AE02、2A26、boot 與 Wi‑Fi bootstrap 順序。

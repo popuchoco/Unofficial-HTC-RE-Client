@@ -1,5 +1,7 @@
 # Code Review 處理紀錄
 
+文件狀態：已依 `0.6.1` 核對。
+
 本文件記錄 2026-09 的外部 Code Review 與專案決策，避免後續審查把既有相容性選擇誤判為遺漏。
 
 | 項目 | 處理 | 說明 |
@@ -12,7 +14,7 @@
 | 檔案 socket 無 timeout | 已修正 | `9003`、`9004` 改用 30 秒 read timeout，避免永久阻塞。 |
 | Log 洩漏 token／串流金鑰 | 已補強 | 除 Wi‑Fi 密碼外，新增 Bearer token 與 stream key 遮蔽。 |
 | MediaStore 斷點續傳宣稱 | 已校正文件 | GC1 協議本身接受 offset，但目前 MediaStore sink 失敗時刪除 pending 項目；重新下載會從頭開始，因此不宣稱跨工作階段續傳。 |
-| 全域 cleartext | 保留並說明 | RE 的位址由 Wi‑Fi Direct 動態分配，Android Network Security Config 無法按動態子網加 TCP port 設白名單。程式只為相機區域鏈路建立 HTTP，外部服務使用 HTTPS；未來 target 升級時再評估 socket-only 架構。 |
+| 全域 cleartext | 保留並說明 | RE 的位址由 Wi‑Fi Direct 動態分配，Android Network Security Config 無法按動態子網加 TCP port 設白名單。能力只供區域相機 profile 相容；A000 已驗證功能走 GC1 socket，外部服務使用 HTTPS。 |
 | UDP 7777 來源驗證 | 待相容性測試 | 目前 receiver 只在有效 bootstrap generation 與 60 秒窗口存活。不能假設所有 RE 韌體都使用固定 `/24`，未取得跨韌體證據前不加入可能阻斷實機的子網規則。 |
 | target 33+ Wi‑Fi 權限路徑 | 歷史決策 | ADR-003 選擇 target 32，以兼容 Android 12+ BLE 權限並暫緩 `NEARBY_WIFI_DEVICES` 遷移；compileSdk 35 用於新 API 編譯。 |
 | 大型 Activity／連線管理器拆分 | 技術債 | 已列入 `SOFTWARE_DESIGN.md` 的目標元件；本輪不在已通過實機驗證後做高風險重構。 |
@@ -20,4 +22,4 @@
 
 ## Review 證據基準
 
-`0.6.0` 實機 Log 已證明 BLE／P2P／GC1 握手、版本與容量查詢、照片／影片控制、影片完整下載及媒體刪除可運作。Review 指出的相容性與資源回收問題仍予修正，但不得據此改動已驗證的封包順序或混用不同控制 profile。
+`0.6.0` 實機 Log 已證明 BLE／P2P／GC1 握手、版本與容量查詢、照片／影片控制、照片與影片完整下載及媒體刪除可運作；`0.6.1` 納入表列的 callback、資源回收及文件修正。後續不得據此改動已驗證的封包順序或混用不同控制 profile。

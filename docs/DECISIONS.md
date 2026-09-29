@@ -1,12 +1,6 @@
 # 架構決策紀錄
 
-## ADR-006：Wi-Fi 引導使用序列 GATT 佇列
-
-所有 characteristic write 維持單一 in-flight，只有收到成功 callback 才送下一個封包。通知訂閱先於 SSID、passphrase 與 station/config，最後等待設定狀態與 RE IPv4。拒絕平行寫入與固定延遲，因兩者無法證明相機已接收前一包。
-
-## ADR-007：YouTube Live 分離控制面與媒體面
-
-串流頁先提供 Google 授權與 YouTube broadcast/stream/bind/transition 控制；RTSP 到 RTMP 的 relay 是獨立後續元件。UI 不會把「已建立 YouTube session」誤示為「已開始傳送影音」。
+文件狀態：已依 RE Lens `0.6.1` 核對。ADR 編號代表穩定決策，不以實作版本重新編號。
 
 ## ADR-001：獨立 App
 
@@ -14,35 +8,42 @@
 
 ## ADR-002：BLE 控制面與 Wi‑Fi Direct 資料面分離
 
-BLE 用於探索與網路啟動；照片、影片和預覽由 Wi‑Fi Direct IP 鏈路承載，以取得合理速度與可靠性。
+BLE 負責探索、密碼驗證、boot 與 Wi‑Fi credential bootstrap；照片、影片、裝置資訊和預覽由 Wi‑Fi Direct IP 鏈路承載。A000 實機使用 GC1 `9000`–`9004` socket；port 3000 HTTP／WebSocket 僅保留為其他 profile 的相容邊界，不得套用到 A000。
 
 ## ADR-003：Target SDK 32
 
 設定 `minSdk 26`、`targetSdk 32`、`compileSdk 35`：
 
 - Android 12+ 使用 `BLUETOOTH_SCAN` 與 `BLUETOOTH_CONNECT`。
-- 避免 target 33+ 導入 `NEARBY_WIFI_DEVICES` 的不同執行期權限路徑。
-- Android 15 上仍可使用新版編譯工具與公開 API。
-- Compile SDK 不改變 HTC RE 的 BLE、Wi‑Fi 或 HTTP 協定。
+- 暫不導入 target 33+ 的 `NEARBY_WIFI_DEVICES` 執行期權限路徑。
+- Compile SDK 35 只影響可編譯 API，不改變 HTC RE 收到的 BLE、Wi‑Fi 或 GC1 協議。
 
-若 Google Play 發布要求、Android 停止相容 target 32，或 target 35 完成全套 P2P 實機回歸測試，重新評估此決定。
+若發行平台不再接受 target 32，或 target 35 完成 Android 13–15 的 BLE／P2P 實機矩陣，再重新評估。Manifest 已先加入 Android 14 connected-device 前景服務權限。
 
-## ADR-004：保留 Cleartext HTTP
+## ADR-004：保留 Cleartext 相容能力
 
-設定 `android:usesCleartextTraffic="true"`，因裝置位於點對點區域網路且其介面使用 HTTP。未來可用 Network Security Config 進一步限縮目的地。
+保留 `android:usesCleartextTraffic="true"`，供區域相機 profile 使用 HTTP。A000 的已驗證功能走 GC1 socket。RE 位址由 Wi‑Fi Direct 動態分配，而 Android Network Security Config 無法同時按動態子網及 TCP port 限縮，因此不宣稱它能完成此白名單；外部 YouTube API 一律使用 HTTPS。
 
 ## ADR-005：不使用隱藏 Wi‑Fi API
 
-API 29+ 使用公開的 `WifiP2pGroup.getFrequency()`；較舊版本將頻率視為選填資訊，不呼叫 `getOptFreq`。頻率不得成為連線流程的單點失敗。
+API 29+ 使用公開的 `WifiP2pGroup.getFrequency()` 並建立 2.4 GHz autonomous group；API 26–28 將頻率視為選填資訊，不呼叫 `getOptFreq` 或 `getFrequency` 隱藏方法。
 
-## ADR-006：HTTP Range 續傳
+## ADR-006：Wi‑Fi 引導使用序列 GATT 佇列
 
-媒體下載以既有檔案長度作為 Range 起點，並處理 `200` 與 `206`，降低大檔案因鏈路中斷而重傳的成本。
+所有 credential characteristic write 維持單一 in-flight；收到 callback 後仍保留約 1.5 秒裝置節流才送下一包。AE01／AE02、2A26 與 boot 必須先完成，A201／A301／A302／A303 不得並行寫入。
 
-## ADR-007：RTSP 預覽暫列未來功能
+## ADR-007：GC1 分段下載與 MediaStore 提交分離
 
-實機已證明 GC1 command `130` 與 event `0x4012` 能正常啟動串流，但 SDP 使用 Media3 不支援的 RTP/JPEG static payload type 26。參考取景器採專用逐幀串流元件，因此移除無效的 Media3 自動重試，拍攝控制繼續提供；待有 RFC 2435 相容解碼器後再恢復內嵌預覽。
+GC1 command `405` 使用 handle 與 offset 分段取回原檔。Android 10+ 每次操作建立新的 MediaStore pending 項目，成功後提交，失敗即刪除；因此目前支援分段下載，但不宣稱跨工作階段續傳。Android 8–9 使用公開媒體目錄與 media scan。
 
-## ADR-008：預覽品質先採 Auto
+## ADR-008：RTSP 預覽暫列未來功能
 
-拍照取景器先固定採已確認的 Still mode、24 fps、M 尺寸及 High 壓縮率，並保留日後依播放 FPS 自動調整尺寸的架構。在基準取景流程完成實機驗證前，不把 RTSP FPS、尺寸及壓縮率暴露成一般設定，避免把縮時播放 FPS、拍攝解析度與預覽傳輸品質混為一談。後續若加入手動覆寫，放在「裝置 → 進階 → 預覽品質」，預設 Auto、保存偏好並提供恢復 Auto。
+實機已證明 command `130` 與 event `0x4012` 能啟動串流，但 SDP 使用 Media3 不支援的 RTP/JPEG payload type 26。拍照與錄影控制保留；待加入 RFC 2435 相容 depacketizer／decoder 後再恢復內嵌預覽。
+
+## ADR-009：預覽品質預設 Auto
+
+已知取景參數為 Still mode、24 fps、M 尺寸及 High 壓縮率，但目前播放器未啟用，因此不提供沒有可觀察效果的設定 UI。未來恢復預覽後，手動覆寫放在「裝置 → 進階 → 預覽品質」，預設 Auto 並保存偏好。
+
+## ADR-010：YouTube Live 分離控制面與媒體面
+
+串流頁提供 Google 授權及 YouTube broadcast／stream／bind／transition 控制；RTSP 到 RTMP relay 是獨立的未來媒體元件。建立 YouTube session 不得顯示成已開始傳送影音。

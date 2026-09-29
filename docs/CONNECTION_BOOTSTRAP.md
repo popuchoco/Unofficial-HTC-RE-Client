@@ -1,5 +1,7 @@
 # BLE 與 Wi-Fi Direct 連線引導
 
+文件狀態：已依 `0.6.1` 程式與實機成功 Log 核對。
+
 HTC RE 第一次啟動時，手機先透過 BLE 建立控制通道。手機建立 Wi-Fi Direct group 後，將該 group 的 SSID 與 passphrase 經由 GATT 傳給 RE；RE 再以 station 模式加入 group，成功後由 BLE 通知或 UDP 7777 回報相機 IPv4 位址。後續 GC1、檔案下載與 RTSP 都使用這條 IP 網路。
 
 實機記錄顯示 GC1 在 2412 MHz 可完成 station 加入，但在 5180 MHz 連續回報 `A304 status=26`。Android 10（API 29）以上因此必須以公開 API 指定 2.4 GHz group；已存在的 5 GHz owner group 不得沿用，需先移除再重建。API 26–28 無公開頻帶指定 API，保留系統預設建立路徑並必須在實機確認頻率。
@@ -10,15 +12,15 @@ API 29+ 使用 `WifiP2pConfig.Builder` 建立自主 owner group 時，不能只�
 
 ## 必須遵守的寫入順序
 
-1. 建立 BLE GATT 連線並完成 bonding；配對完成後關閉配對前的 GATT instance、刷新可用的 Android GATT cache，再以新連線探索 RE 控制服務。
+1. 建立 BLE GATT 連線；等待 ACL／GATT 穩定後探索服務，必要時完成 bonding。現行程式不依賴隱藏的 GATT cache refresh API。
 2. 註冊 Wi-Fi 設定狀態 characteristic；第一代 `A000` 先依序訂閱 `AE01/AE02` multiplex notification，兩筆 CCCD callback 成功後才視為控制通道就緒；multiplex event 再映射回 `A101/A304`。
-3. 優先承接手機既有的 Wi-Fi Direct owner group；沒有可用 group 時建立新群組，取得 SSID、passphrase 與頻率。
-4. 第一代 `A000` profile 先讀取 `A101` Bootup Ready bit；只有待機時才寫入 `A107={1}`，成功後等待 1.5 秒，再寫入國別與頻段。
+3. 建立或取得相容的 Wi-Fi Direct owner group，取得 SSID、passphrase 與頻率；既有 5 GHz group 必須移除重建。
+4. 讀取標準 `2A26` BLE FW，依 `> 2250` 或 `<= 2250` 嚴格選擇單一 boot 分支；詳細順序見 [A000 連線流程稽核](A000_CONNECTION_FLOW_AUDIT.md)。boot ready 後才寫入國別與頻段。
 5. 寫入 SSID；若超過單包大小則依序分段。
 6. 每一段都等待 `onCharacteristicWrite` 成功，才寫下一段。
 7. 寫入 passphrase，規則同上。
 8. 寫入 station/config 命令，內容含國別、頻段、WPA2、頻道與可選 IP 參數。
-9. 等待 Wi-Fi 設定狀態通知，成功時解析 RE 的 IPv4 並自動更新 HTTP client；60 秒未回報則逾時。
+9. 等待 Wi-Fi 設定狀態通知或 UDP 7777，成功時取得 RE IPv4；60 秒未回報則逾時。後續 A000 功能使用 GC1 socket，而非 port 3000 HTTP。
 
 任一時間只允許一個 in-flight GATT write。不得同時寫入多個 characteristic，也不得用固定延遲取代 callback。
 
@@ -26,7 +28,7 @@ API 29+ 使用 `WifiP2pConfig.Builder` 建立自主 owner group 時，不能只�
 
 GC1 檔案通道的分段 wire offset 與實際寫入檔案的 byte count 必須分開計數：第一個 fragment 的 declared length 包含 1-byte status，因此寫入 32768 bytes 後，下一個 wire offset 為 32769。任一分段驗證失敗都必須關閉並重建 GC1 的 9000–9004 sockets，不得在含有殘留 frame 的 9003 socket 上繼續下一筆命令。
 
-GC1 拍照取景器必須逐筆等待 command 回覆，依序送出 `261`（Still mode，payload=`00`）、`234`（24 fps，payload=`60 09`）、`233`（M 尺寸，payload=`02`）、`235`（High 壓縮率，payload=`02`）及 `130`。30 fps／S profile 是遠端串流整合用途，不得混入拍照取景器。`130` 成功回應的狀態位元組後方即為 RTSP URI，應立即交給播放器；`0x4012` 是獨立的 ready 通知，只供狀態與診斷使用，不可阻塞 URI callback。A000 若未在 `130` 回覆中附 URI，使用 `rtsp://<camera-ip>:8554/MJPEG_unicast`。進入取景器前，參考流程另以 `222/02` 切換 Control mode 並以 `201` 查詢 DR 狀態；這組上游 gate 尚待獨立實作與測試，不得和 URI callback 修正混為同一實驗。切換頁籤時 command `131` 最多等待 3 秒；逾時即重建 GC1 session，不能長時間阻擋相簿或拍攝命令。
+GC1 預覽控制逐筆等待 command 回覆，依序送出 `261`（Still mode，payload=`00`）、`234`（24 fps，payload=`60 09`）、`233`（M 尺寸，payload=`02`）、`235`（High 壓縮率，payload=`02`）及 `130`。`130` 回覆可帶 RTSP URI；`0x4012` 是獨立 ready 事件，不是 URI 回覆。這段控制流程已驗證，但現行 UI 不把 URI 交給播放器，因 RE 的 RTP/JPEG payload type 26 尚無相容 decoder。未來恢復預覽時仍需評估 `222/02` Control mode 與 `201` DR gate；停止命令 `131` 最多等待 3 秒，逾時需重建 GC1 session，避免阻擋相簿或拍攝。
 
 Wi-Fi Direct group 建立前另有硬性前置條件：BLE 必須仍為 connected、RE 的短／長命令 characteristic 均已找到，而且狀態通知 CCCD 寫入成功。一般 BLE 周邊、無名廣播、尚未完成 service discovery 的裝置或已斷線的舊狀態，都不能進入 P2P 階段。
 

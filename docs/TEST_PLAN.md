@@ -1,6 +1,8 @@
 # 測試計畫
 
-## 0.3.0 必測項目
+文件狀態：已依 RE Lens `0.6.1` 更新；「已驗證」僅代表目前 Samsung S21 5G+／RE 組合，不代表完整 Android 矩陣。
+
+## 目前回歸項目
 
 - 單元測試確認第二個 GATT packet 在第一個 `onCharacteristicWrite` 前不得送出。
 - 單元測試確認 36-byte 長命令分成 17、18、1-byte payload 的三包，序號依序為首包、`0x02`、`0x04`。
@@ -12,14 +14,14 @@
 - GC1 405 分段下載必測第一包 1-byte status 計入 wire offset、後續包連續性及中斷後 socket 重建；MediaStore 重新操作目前由頭下載。
 - RTSP 控制流程保留協議測試，但 UI 不啟動播放器：實機已確認 RTP/JPEG payload type 26 不受 Media3 支援。未來 decoder 接入前，不得恢復自動重試或把狀態顯示為可用。
 - Android 10+ 下載成功後，照片須出現在 `Pictures/RE Lens`、影片須出現在 `Movies/RE Lens`；傳輸失敗不得留下 pending MediaStore 項目。Android 8–9 驗證儲存權限與媒體掃描。
-- Samsung S21 實機已確認 MediaStore 照片下載成功並產生公開 Images URI；影片與 Android 8–9 路徑仍列入硬體矩陣。
+- Samsung S21 實機已確認 MediaStore 照片與影片下載成功並產生公開媒體 URI；Android 8–9 路徑仍列入硬體矩陣。
 - 確認匯出 log 不含 SSID、passphrase、OAuth token 或 YouTube stream key。
 - YouTube 測試涵蓋取消授權、API 錯誤、建立並綁定、stream 未 active 時禁止 live、正常 complete。
 
 ## 自動測試
 
-- HTTP method、路徑與 JSON request。
-- `200`／`206` Range 續傳及錯誤 Content-Range。
+- 非 A000 相容層的 HTTP method、路徑與 JSON request（不得視為 GC1 驗證）。
+- HTTP `200`／`206` Range 行為僅屬相容層測試；A000 MediaStore 路徑使用 GC1 `405` 且目前不跨工作階段續傳。
 - 媒體 ID／檔名正規化與路徑邊界。
 - GC1 相簿空清單、未知媒體類型、detail handle 不符及 fragment offset 不連續。
 - GC1 `408` 刪除 payload 必須含 little-endian handle 與結尾 `00000000`；UI 必須二次確認，成功後重新載入清單。
@@ -33,13 +35,13 @@
 
 | 編號 | 情境 | 驗收條件 |
 |---|---|---|
-| HW-01 | BLE 掃描 | 10 秒內找到裝置或顯示可重試錯誤 |
-| HW-02 | GATT 配對 | 完成認證並取得基本資訊 |
-| HW-03 | P2P group | 相機加入且手機取得可連線 IP |
-| HW-04 | 拍照 | 單次命令只產生一張照片 |
-| HW-05 | 錄影 | 開始／停止一致且檔案可列出 |
-| HW-06 | 相簿 | `401/404` 項目數、檔名、類型與大小和 RE 實際內容一致 |
-| HW-07 | 照片下載 | 檔案可開啟且大小正確 |
+| HW-01 | BLE 掃描 | 10 秒內找到 RE 或顯示可重試錯誤（Samsung S21 已驗證） |
+| HW-02 | GATT 配對 | 完成認證、通知訂閱及 2A26（Samsung S21 已驗證） |
+| HW-03 | P2P group | 相機加入且手機取得可連線 IP（Samsung S21 已驗證） |
+| HW-04 | 拍照 | 單次命令只產生一張照片（已驗證） |
+| HW-05 | 錄影 | 開始／停止一致且檔案可列出（已驗證） |
+| HW-06 | 相簿 | `401/404` 項目數、檔名、類型與大小和 RE 實際內容一致（已驗證） |
+| HW-07 | 照片下載 | 檔案可開啟且大小正確（已驗證） |
 | HW-08 | 影片下載 | 分段下載完成後可由系統相簿播放（已驗證） |
 | HW-09 | 30 分鐘連線 | 無資源洩漏或無限重連 |
 | HW-10 | RTSP | 暫緩；待 RFC 2435 相容 decoder 後重新啟用播放驗證 |
@@ -59,6 +61,6 @@
 
 - Clean build 與 lint 通過。
 - Manifest 權限與 exported component 核驗完成。
-- HW-01 至 HW-09 在 Android 12、15 通過。
+- 發布為穩定版前，HW-01 至 HW-09 應在 Android 12、15 通過；目前僅完成 Samsung S21 5G+ 的主流程驗證。
 - 無明文記錄密碼、序號及媒體內容。
 - 已知限制與支援韌體寫入 release notes。
