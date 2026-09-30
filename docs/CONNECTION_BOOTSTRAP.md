@@ -1,6 +1,6 @@
 # BLE 與 Wi-Fi Direct 連線引導
 
-文件狀態：已依 `0.6.2` 程式與實機 Log 核對。
+文件狀態：已依 `0.6.3` 程式與最新實機 Log 核對；群組重建恢復仍待下一輪實機驗證。
 
 HTC RE 第一次啟動時，手機先透過 BLE 建立控制通道。手機建立 Wi-Fi Direct group 後，將該 group 的 SSID 與 passphrase 經由 GATT 傳給 RE；RE 再以 station 模式加入 group，成功後由 BLE 通知或 UDP 7777 回報相機 IPv4 位址。後續 GC1、檔案下載與 RTSP 都使用這條 IP 網路。
 
@@ -20,11 +20,13 @@ API 29+ 使用 `WifiP2pConfig.Builder` 建立自主 owner group 時，不能只�
 6. 每一段都等待 `onCharacteristicWrite` 成功，才寫下一段。
 7. 寫入 passphrase，規則同上。
 8. 寫入 station/config 命令，內容含國別、頻段、WPA2、頻道與可選 IP 參數。
-9. 等待 Wi-Fi 設定狀態通知或 UDP 7777，成功時取得 RE IPv4；60 秒未回報則逾時。後續 A000 功能使用 GC1 socket，而非 port 3000 HTTP。
+9. 等待 Wi-Fi 設定狀態通知或 UDP 7777，成功時取得 RE IPv4；60 秒未回報則逾時。第一次逾時會關閉舊 UDP session、移除 owner group、建立新群組並完整重送一次；第二次仍失敗才停止。後續 A000 功能使用 GC1 socket，而非 port 3000 HTTP。
 
 任一時間只允許一個 in-flight GATT write。不得同時寫入多個 characteristic，也不得用固定延遲取代 callback。
 
 連線按鈕、Activity 重建與背景監看共用同一個連線管理器。只要 GATT 尚在連線或建立中，新的 connect 請求必須被拒絕；被替換的 GATT callback、重複 connected callback 與重複 service-discovery callback 不得重置狀態機或重跑認證。UDP 7777 接收器亦以 session generation 隔離，過期執行緒不得占用 port 或回填舊 IP。
+
+第一代 A303 在稽核基準中是 write 後再 readback 並要求 payload 完全一致；`0.6.3` 現行佇列仍只確認 write callback。這是已知待補差異，不得把它記為完成，也不與本次群組重建修正混在同一個實機判讀中。
 
 GC1 檔案通道的分段 wire offset 與實際寫入檔案的 byte count 必須分開計數：第一個 fragment 的 declared length 包含 1-byte status，因此寫入 32768 bytes 後，下一個 wire offset 為 32769。任一分段驗證失敗都必須關閉並重建 GC1 的 9000–9004 sockets，不得在含有殘留 frame 的 9003 socket 上繼續下一筆命令。
 

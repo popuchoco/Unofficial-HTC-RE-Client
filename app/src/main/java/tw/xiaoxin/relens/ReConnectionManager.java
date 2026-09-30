@@ -69,6 +69,7 @@ final class ReConnectionManager {
     private static final long GC1_GATT_THROTTLE_MS = 1_500L;
     private static final long SERVICE_DISCOVERY_STABILIZATION_MS = 3_000L;
     private static final long CONFIG_TIMEOUT_MS = 60_000L;
+    private static final int WIFI_STATION_MAX_ATTEMPTS = 2;
     private static final int GROUP_INFO_MAX_ATTEMPTS = 12;
     private static final long GROUP_INFO_RETRY_MS = 750L;
     private static final int PASSWORD_NONE = 0;
@@ -116,6 +117,9 @@ final class ReConnectionManager {
     private boolean notificationsReady;
     private boolean awaitingConfigStatus;
     private boolean p2pStartRequested;
+    private int wifiStationAttempt;
+    private boolean freshP2pGroupRequired;
+    private boolean wifiStationAttemptActive;
     private boolean bootReadInFlight;
     private boolean securityProbeInFlight;
     private boolean passwordHandshakeInFlight;
@@ -152,8 +156,11 @@ final class ReConnectionManager {
     private final Runnable configTimeout = () -> {
         if (!awaitingConfigStatus) return;
         awaitingConfigStatus = false;
+        wifiStationAttemptActive = false;
         setP2p("RE 加入逾時，請重試");
+        closeGc1IpDiscovery();
         AppLog.w("BLE", "Wi-Fi config status timeout");
+        retryWifiStationWithFreshGroup("IP timeout");
     };
     private final Runnable bootTimeout = () -> {
         if (!bootWakeInFlight || bootPreparationComplete) return;
@@ -188,6 +195,13 @@ final class ReConnectionManager {
                 setP2p(label + "（尚有 " + remaining + " 個封包）");
             }
             @Override public void onComplete() {
+                if (controlProfile == 1 && !wifiStationAttemptActive) {
+                    AppLog.i("BLE", "Wi-Fi bootstrap queue completed after station result");
+                    if (freshP2pGroupRequired && pendingGroup != null) {
+                        startWifiBootstrapIfReady();
+                    }
+                    return;
+                }
                 awaitingConfigStatus = true;
                 transition(A000ConnectionState.IP_WAITING, "Wi-Fi bootstrap writes complete");
                 setP2p("設定已送出，等待 RE 回報 IP");
@@ -197,6 +211,7 @@ final class ReConnectionManager {
             }
             @Override public void onError(String message) {
                 awaitingConfigStatus = false;
+                wifiStationAttemptActive = false;
                 setP2p(message);
                 AppLog.w("BLE", message);
             }
@@ -358,6 +373,9 @@ final class ReConnectionManager {
         controlProfile = 0;
         pendingGroup = null;
         p2pStartRequested = false;
+        wifiStationAttempt = 0;
+        freshP2pGroupRequired = false;
+        wifiStationAttemptActive = false;
         cameraIp = null;
         bootReadInFlight = false;
         securityProbeInFlight = false;
@@ -414,6 +432,12 @@ final class ReConnectionManager {
             manager.requestGroupInfo(p2pChannel, group -> {
                 int frequency = group != null && Build.VERSION.SDK_INT >= 29
                         ? group.getFrequency() : 0;
+                if (freshP2pGroupRequired && group != null) {
+                    AppLog.i("P2P", "Removing previous owner group before station retry");
+                    pendingGroup = null;
+                    removeGroupThenCreate(manager, p2pChannel);
+                    return;
+                }
                 if (group != null && P2pBootstrapPolicy.canReuseOwnerGroup(group.isGroupOwner(),
                         group.getNetworkName(), group.getPassphrase(), frequency)) {
                     AppLog.i("P2P", "Reusing existing owner group");
@@ -530,6 +554,7 @@ final class ReConnectionManager {
             return;
         }
         pendingGroup = group;
+        freshP2pGroupRequired = false;
         p2pStartRequested = false;
         setP2p("群組已建立" + (frequency > 0 ? " · " + frequency + " MHz" : ""));
         transition(A000ConnectionState.P2P_GROUP_READY, "owner group credentials ready");
@@ -1264,6 +1289,10 @@ final class ReConnectionManager {
                     "設定 station 模式並加入群組"));
         }
         AppLog.i("BLE", "Starting serial Wi-Fi bootstrap; credentials redacted");
+        wifiStationAttempt++;
+        wifiStationAttemptActive = true;
+        AppLog.i("P2P", "Wi-Fi station attempt=" + wifiStationAttempt
+                + "/" + WIFI_STATION_MAX_ATTEMPTS);
         transition(A000ConnectionState.WIFI_BOOTSTRAP, "A201/A301/A302/A303 queued");
         commandQueue.replace(writes);
     }
@@ -1463,6 +1492,10 @@ final class ReConnectionManager {
             return;
         }
         if (controlProfile == 1 && GC1_PHONE_RESULT.equals(characteristicId)) {
+            if (!WifiStationRetryPolicy.shouldAcceptResult(wifiStationAttemptActive)) {
+                AppLog.i("BLE", "Ignoring A304 outside active station attempt");
+                return;
+            }
             finishWifiConfig(value, 1);
             return;
         }
@@ -1476,8 +1509,10 @@ final class ReConnectionManager {
         if (status != 0) {
             main.removeCallbacks(configTimeout);
             awaitingConfigStatus = false;
+            wifiStationAttemptActive = false;
             closeGc1IpDiscovery();
-            setP2p("RE 加入群組失敗（status=" + status + "）");
+            AppLog.w("BLE", "RE Wi-Fi config failed status=" + status);
+            retryWifiStationWithFreshGroup("A304 status=" + status);
             return;
         }
         int ipIndex = statusIndex + 1;
@@ -1490,6 +1525,7 @@ final class ReConnectionManager {
         }
         main.removeCallbacks(configTimeout);
         awaitingConfigStatus = false;
+        wifiStationAttemptActive = false;
         closeGc1IpDiscovery();
         cameraIp = ip;
         transition(A000ConnectionState.IP_READY, "A304 camera IPv4 received");
@@ -1545,6 +1581,7 @@ final class ReConnectionManager {
         if (ip == null || ip.isEmpty()) return;
         main.removeCallbacks(configTimeout);
         awaitingConfigStatus = false;
+        wifiStationAttemptActive = false;
         cameraIp = ip;
         transition(A000ConnectionState.IP_READY, "camera IPv4 received");
         setP2p("RE 已連線，IP " + ip);
@@ -1559,6 +1596,26 @@ final class ReConnectionManager {
             ipDiscoverySocket = null;
         }
         if (socket != null && !socket.isClosed()) socket.close();
+    }
+
+    private void retryWifiStationWithFreshGroup(String reason) {
+        freshP2pGroupRequired = true;
+        pendingGroup = null;
+        if (!WifiStationRetryPolicy.shouldRecreateGroup(reGattConnected, wifiStationAttempt,
+                WIFI_STATION_MAX_ATTEMPTS)) {
+            transition(A000ConnectionState.ERROR, "Wi-Fi station failed: " + reason);
+            setP2p("等待 RE 的 IP 回覆逾時；下次連線會重建 Wi-Fi Direct 群組");
+            AppLog.w("P2P", "Station retry stopped reason=" + reason
+                    + " attempt=" + wifiStationAttempt);
+            return;
+        }
+        transition(A000ConnectionState.P2P_GROUP_READY,
+                "station retry requires fresh owner group");
+        setP2p("RE 尚未回報 IP，正在重建 Wi-Fi Direct 群組後重試");
+        AppLog.i("P2P", "Station retry after fresh group reason=" + reason
+                + " nextAttempt=" + (wifiStationAttempt + 1));
+        p2pStartRequested = false;
+        main.post(this::createP2pGroup);
     }
 
     private void addGc1LongPackets(List<GattCommandQueue.Packet> writes, UUID characteristic,

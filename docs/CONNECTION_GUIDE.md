@@ -1,6 +1,6 @@
 # 連線操作指南
 
-文件狀態：適用 RE Lens `0.6.2`。
+文件狀態：適用 RE Lens `0.6.3`。
 
 本指南說明 RE Lens 如何在 Android 手機與 HTC RE 之間建立 BLE 控制通道、Wi‑Fi Direct 網路及 GC1 socket 通道。一般使用者不需要手動輸入 Wi‑Fi Direct 的 SSID 或密碼。
 

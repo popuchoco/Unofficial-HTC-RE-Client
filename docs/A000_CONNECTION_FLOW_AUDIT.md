@@ -1,6 +1,6 @@
 # A000 連線流程稽核
 
-文件狀態：已於 `0.6.2` 重新核對。以下流程已落入現行程式，且 BLE 認證、AE01／AE02、2A26、boot、Wi‑Fi bootstrap、IP 回報及 GC1 `501` 握手已有實機成功記錄。本文保留 0.4.x 的差異表作為歷史稽核，不代表目前版本仍停在診斷階段。
+文件狀態：已於 `0.6.3` 重新核對。BLE 認證、AE01／AE02、2A26、boot、Wi-Fi bootstrap、IP 回報及 GC1 `501` 握手曾有實機成功記錄；`0.6.3` 新增的 station 群組重建恢復仍待實機驗證。本文保留 0.4.x 的差異表作為歷史稽核。
 
 ## 稽核結論
 
@@ -40,8 +40,8 @@
 | `BLE_FW_KNOWN` | `bleFw` 已知 | 建立手機端 Wi-Fi Direct owner group並取得 SSID/passphrase | group state=`CREATED` 且憑證非空 | `P2P_GROUP_READY` | 依 Android callback 重試 group info |
 | `P2P_GROUP_READY` | group 已建立 | 呼叫 boot task | 嚴格依下表選一條分支 | `BOOT_WAITING` 或 `BOOT_READY` | 不允許混合分支 |
 | `BOOT_READY` | A101 bit 0=1 | 開始 station task | boot task result=0 | `WIFI_BOOTSTRAP` | 最多五次完整 boot attempt |
-| `WIFI_BOOTSTRAP` | P2P group 存在且 boot ready | A201 → A301 → A302；先建立 A304 waiter，再送 A303 | 每次 write callback 成功；A303 另需 readback 相等 | `IP_WAITING` | 任一步失敗即中止本次 attempt |
-| `IP_WAITING` | A303 已接受 | 並行等待 A304 與 UDP/7777 | 任一路徑先取得成功結果與 IPv4 | `IP_READY` | 現行 timeout 60 秒；失敗後由使用者重試連線 |
+| `WIFI_BOOTSTRAP` | P2P group 存在且 boot ready | A201 → A301 → A302 → A303 | 現行程式等待每次 write callback；A303 exact readback 尚待補齊 | `IP_WAITING` | 任一步失敗即中止本次 attempt |
+| `IP_WAITING` | A303 write callback 成功 | 並行等待 A304 與 UDP/7777 | 任一路徑先取得成功結果與 IPv4 | `IP_READY` | timeout 60 秒；第一次失敗先移除並重建 group 後完整重試，第二次才停止 |
 | `IP_READY` | camera IPv4 已知 | 按功能建立 GC1 `9000`–`9004` socket | command `501` 握手成功 | GC1 控制可用 | 保留 BLE，個別操作回報 socket／協議錯誤 |
 
 ## Boot 的互斥分支
@@ -104,7 +104,7 @@ A301/A302 的 GC1 fragmentation：每片最多 18 bytes payload；byte 0=`payloa
 
 ## Wi-Fi station retry 矩陣
 
-station task 最多三個外層 attempt；失敗後會移除 P2P group，再依 BLE FW 調整參數。若第一次結果不是特定可重試錯誤，流程可能直接減少剩餘次數。
+稽核基準的 station task 最多三個外層 attempt；失敗後會移除 P2P group，再依 BLE FW 調整參數。若第一次結果不是特定可重試錯誤，流程可能直接減少剩餘次數。現行 `0.6.3` 先保守實作最多兩次：第一次 IP timeout 或 A304 非零狀態會移除舊群組、建立新群組並完整重送，第二次失敗才停止。參數變體及 A303 exact readback 仍列為待完成差異，不能寫成已實作。
 
 | BLE FW | 較前 attempt | 最後 attempt | 說明 |
 |---|---|---|---|

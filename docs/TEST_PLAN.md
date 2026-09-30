@@ -1,6 +1,6 @@
 # 測試計畫
 
-文件狀態：已依 RE Lens `0.6.2` 更新；「已驗證」僅代表目前 Samsung S21 5G+／RE 組合，不代表完整 Android 矩陣。
+文件狀態：已依 RE Lens `0.6.3` 更新；「已驗證」僅代表目前 Samsung S21 5G+／RE 組合，不代表完整 Android 矩陣。`0.6.3` 的群組重建恢復尚待實機驗證。
 
 ## 目前回歸項目
 
@@ -12,6 +12,7 @@
 - 單元測試確認自主 owner group 的 SSID 符合 `DIRECT-xy` 規則、passphrase 長度在 8–63 之間；Builder 參數無效時 App 不得閃退。
 - 在背景監看開啟、Activity 重建、BLE 斷線與連續點擊連線情境下，確認只有一個 GATT session、一次認證與一組 AE01/AE02 訂閱。
 - 連續重試 Wi-Fi bootstrap，確認 UDP 7777 無 `BindException`，舊 session 的 IP 不會覆蓋新 session。
+- 單元測試確認第一次 station 失敗可重建群組、第二次停止，且非 active attempt 的 A304 必須忽略；實機須確認第一次 IP timeout 後確實先移除舊群組再建立新群組並重送完整 bootstrap。
 - GC1 405 分段下載必測第一包 1-byte status 計入 wire offset、後續包連續性及中斷後 socket 重建；MediaStore 重新操作目前由頭下載。
 - RTSP 控制流程保留協議測試，但 UI 不啟動播放器：實機已確認 RTP/JPEG payload type 26 不受 Media3 支援。未來 decoder 接入前，不得恢復自動重試或把狀態顯示為可用。
 - Android 10+ 下載成功後，照片須出現在 `Pictures/RE Lens`、影片須出現在 `Movies/RE Lens`；傳輸失敗不得留下 pending MediaStore 項目。Android 8–9 驗證儲存權限與媒體掃描。

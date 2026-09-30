@@ -4,9 +4,11 @@ RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Mat
 
 ## 目前功能
 
-> 目前版本：`0.6.2`。修正 A101 ready 事件早於 A107 write callback 時，Wi-Fi bootstrap 過早插入 GATT 操作的競態；現在必須完成 A107 回讀並遵守 1.5 秒節流才會送出 A201。介面採用連線 dashboard、Material 3 底部導航與人性化裝置資訊；相簿支援 MediaStore 下載及確認後刪除 RE 原檔。
+> 目前版本：`0.6.3`。依連線流程稽核補齊 Wi-Fi station 失敗恢復：第一次等候 IP 逾時或 A304 回報失敗時，會移除舊 Wi-Fi Direct 群組、建立新群組並完整重送一次；舊 session 的 A304／UDP 回覆不會寫回新嘗試。此修正仍需 HTC RE 實機確認。
 
 Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGroup()` 後會等待 owner group 的 SSID 與密碼真正可用，才啟動 BLE bootstrap。
+
+`0.6.3` 不會在 IP 逾時後沿用同一組 owner group 無限重送。App 會自動重建一次；若第二次仍失敗才停止並保留「下次連線強制重建群組」標記，避免故障群組殘留。
 
 - 「連線」頁位於最左側：BLE 掃描／連線、Wi-Fi Direct group、背景連線、斷線提醒及藍牙／Wi-Fi 狀態。
 - 連線層以序列 GATT 佇列傳送 Wi-Fi Direct SSID、密碼與 station/config；每一個封包都必須收到 characteristic callback 才會前進。
