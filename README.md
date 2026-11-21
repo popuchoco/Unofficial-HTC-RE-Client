@@ -1,98 +1,104 @@
 # Unofficial HTC RE Client — RE Lens
 
-RE Lens 是為 HTC RE 相機重新打造的非官方 Android 用戶端，採 Material 3 介面並針對目前 Android 權限與元件生命週期設計。本專案與 HTC Corporation 無關。
+[![Android CI](https://github.com/popuchoco/Unofficial-HTC-RE-Client/actions/workflows/android-ci.yml/badge.svg?branch=main)](https://github.com/popuchoco/Unofficial-HTC-RE-Client/actions/workflows/android-ci.yml)
 
-## 目前功能
+**English** · [繁體中文](README-zh-tw.md)
 
-> 目前版本：`0.6.3`。依連線流程稽核補齊 Wi-Fi station 失敗恢復：第一次等候 IP 逾時或 A304 回報失敗時，會移除舊 Wi-Fi Direct 群組、建立新群組並完整重送一次；舊 session 的 A304／UDP 回覆不會寫回新嘗試。此修正仍需 HTC RE 實機確認。
+RE Lens is an unofficial Android client for the HTC RE camera. It features a Material 3 interface and is designed around modern Android permissions and component lifecycles. This project is not affiliated with HTC Corporation.
 
-Wi‑Fi Direct 建立採非同步群組資訊查詢：Android 接受 `createGroup()` 後會等待 owner group 的 SSID 與密碼真正可用，才啟動 BLE bootstrap。
+## Features
 
-`0.6.3` 不會在 IP 逾時後沿用同一組 owner group 無限重送。App 會自動重建一次；若第二次仍失敗才停止並保留「下次連線強制重建群組」標記，避免故障群組殘留。
+> **Current version: 0.6.3.** Connection-flow recovery was improved so the app creates a fresh Wi-Fi Direct group and retries once when the first IP wait times out or the camera reports an A304 failure. Replies from an older session cannot affect the new attempt. This fix still needs verification on HTC RE hardware.
 
-- 「連線」頁位於最左側：BLE 掃描／連線、Wi-Fi Direct group、背景連線、斷線提醒及藍牙／Wi-Fi 狀態。
-- 連線層以序列 GATT 佇列傳送 Wi-Fi Direct SSID、密碼與 station/config；每一個封包都必須收到 characteristic callback 才會前進。
-- 解析 RE 的 Wi-Fi 設定狀態與相機 IPv4，供 GC1 socket 與 RTSP 使用。
-- A000／GC1 原生 socket 拍照、錄影、版本與儲存空間讀取、相簿列舉、刪除及原檔分段下載。
-- 即時預覽列為未來功能；串流頁保留 YouTube Live 控制面，RTSP→RTMP 媒體 relay 尚待完成。
-- 裝置資訊、深色／淺色／系統主題、偵錯 console 與操作 log 匯出。
+Wi-Fi Direct group setup uses asynchronous group information queries. After Android accepts `createGroup()`, the app waits until the owner group's SSID and passphrase are available before starting the BLE bootstrap.
 
-## 平台設定
+Version `0.6.3` no longer retries indefinitely with the same owner group after an IP timeout. The app recreates the group once; if the second attempt also fails, it stops and marks the next connection to force a group recreation, avoiding a stale or failed group.
 
-| 項目 | 設定 |
-|---|---:|
-| minSdk | 26 |
-| targetSdk | 32 |
-| compileSdk | 35 |
+- A leftmost **Connection** screen for BLE scanning and connection, Wi-Fi Direct groups, background connection, disconnect alerts, and Bluetooth/Wi-Fi status.
+- A serialized GATT command queue sends the Wi-Fi Direct SSID, passphrase, and station configuration. Each packet waits for its characteristic callback before the next is sent.
+- Parses the RE Wi-Fi configuration status and camera IPv4 address for GC1 sockets and RTSP.
+- Native A000/GC1 socket operations for photo capture, video recording, firmware version and storage queries, album listing, deletion, and chunked original-file downloads.
+- Live preview is planned. The streaming screen currently provides YouTube Live controls; the RTSP-to-RTMP media relay is not yet implemented.
+- Device information, dark/light/system themes, a debug console, and operation-log export.
+
+## Platform Requirements
+
+| Setting | Value |
+| --- | ---: |
+| `minSdk` | 26 |
+| `targetSdk` | 32 |
+| `compileSdk` | 35 |
 | Java | 17 |
 | Application ID | `tw.xiaoxin.relens` |
 
-target 32 是目前的相容性決策：支援 Android 12+ 的 `BLUETOOTH_SCAN`／`BLUETOOTH_CONNECT` 權限模型，同時暫不切入 target 33+ 的 `NEARBY_WIFI_DEVICES` 路徑。compileSdk 35 讓程式可使用新版 SDK 編譯；升級 target 前必須完成 HTC RE 實機矩陣。
+Target SDK 32 is a deliberate compatibility decision: it supports the Android 12+ `BLUETOOTH_SCAN` and `BLUETOOTH_CONNECT` permission model while deferring the target 33+ `NEARBY_WIFI_DEVICES` path. `compileSdk` 35 allows the project to build against a newer SDK; the HTC RE hardware compatibility matrix must be completed before raising the target SDK.
 
-為相容其他相機 profile 的區域 HTTP，Manifest 保留 `usesCleartextTraffic=true`；目前 A000 的已驗證拍攝、裝置與相簿功能實際走 GC1 socket。YouTube API 一律使用 HTTPS。
+The manifest retains `usesCleartextTraffic=true` for local HTTP used by other camera profiles. The verified A000 capture, device, and album operations currently use GC1 sockets. YouTube API traffic uses HTTPS.
 
-## 連線方式
+## Connection Overview
 
-首次使用時，手機先透過 BLE 與 RE 建立控制通道，再建立 Wi-Fi Direct group。App 將 group 的 SSID 與 passphrase 經 GATT 依序送給 RE，RE 以 station 模式加入並回報 IPv4；GC1 控制、檔案下載與 RTSP 預覽再走此 IP 網路。
+For the first connection, the phone establishes a control channel with the RE camera over BLE, then creates a Wi-Fi Direct group. The app sends the group's SSID and passphrase to the camera sequentially over GATT. The camera joins as a station and reports its IPv4 address. GC1 control, file downloads, and RTSP preview then use that IP network.
 
-一般使用者請依 [連線操作指南](docs/CONNECTION_GUIDE.md) 完成首次連線、日常重連與問題回報。協議握手與佇列規則見 [BLE 與 Wi-Fi Direct 連線引導](docs/CONNECTION_BOOTSTRAP.md)，狀態與測試閘門見 [A000 連線流程稽核](docs/A000_CONNECTION_FLOW_AUDIT.md)。
+Follow the [connection guide](docs/CONNECTION_GUIDE.md) for first-time setup, reconnecting, and reporting issues. Protocol handshakes and queue behavior are documented in [BLE and Wi-Fi Direct bootstrap](docs/CONNECTION_BOOTSTRAP.md); connection state and test gates are documented in the [A000 connection-flow audit](docs/A000_CONNECTION_FLOW_AUDIT.md).
 
-## 連線異常與回報
+## Troubleshooting and Bug Reports
 
-若 Android 偶發拒絕 GATT 操作、控制通道沒有完成訂閱，或 Wi-Fi bootstrap 沒有繼續，請保持 RE 開機且靠近手機，在「連線」頁再次按一次 Wi-Fi Direct 連線並等待流程完成；請勿快速連續點擊。若重試後仍無法恢復，請到「裝置」頁開啟偵錯、匯出操作 Log，並在 [GitHub Issues](https://github.com/popuchoco/Unofficial-HTC-RE-Client/issues/new) 附上：
+If Android intermittently rejects a GATT operation, the control channel does not finish subscribing, or Wi-Fi bootstrap does not continue, keep the RE camera powered on and nearby. On the **Connection** screen, tap Wi-Fi Direct connect once and wait for the flow to finish; do not tap repeatedly in quick succession. If retrying does not recover, enable debugging on the **Device** screen, export the operation log, and open a [GitHub issue](https://github.com/popuchoco/Unofficial-HTC-RE-Client/issues/new) with:
 
-- RE Lens 版本、手機型號及 Android 版本。
-- 問題發生前的操作步驟與畫面訊息。
-- 匯出的 Log（送出前仍請確認不含自行輸入的密碼或其他個人資料）。
+- RE Lens version, phone model, and Android version.
+- Steps taken before the problem and any on-screen messages.
+- The exported log (check that it does not contain passwords you entered or other personal information before uploading).
 
-## 相簿下載位置
+## Downloaded Media Location
 
-Android 10 以上透過 MediaStore 儲存，不再放在 App 專屬的 `Android/data`。照片與影片分別出現在：
+On Android 10 and later, files are saved through MediaStore instead of the app-specific `Android/data` directory. Photos and videos appear in:
 
 ```text
 Pictures/RE Lens/
 Movies/RE Lens/
 ```
 
-檔案可由 Samsung Gallery、Google Photos 或 Samsung「我的檔案」開啟，解除安裝 App 時不會刪除。Android 8–9 使用相同的公開資料夾，首次使用時需允許儲存權限。
+They can be opened in Samsung Gallery, Google Photos, or Samsung My Files, and are not deleted when the app is uninstalled. Android 8–9 use the same public folders and require storage permission on first use.
 
-## 文件
+## Releases
 
-- [文件索引與狀態](docs/README.md)
-- [產品規格](docs/SPECIFICATION.md)
-- [軟體設計](docs/SOFTWARE_DESIGN.md)
-- [架構決策](docs/DECISIONS.md)
-- [Android 相容性](docs/ANDROID_COMPATIBILITY.md)
-- [通訊協議備註](docs/PROTOCOL_NOTES.md)
-- [BLE 與 Wi-Fi Direct 連線引導](docs/CONNECTION_BOOTSTRAP.md)
-- [連線操作指南](docs/CONNECTION_GUIDE.md)
-- [A000 連線流程稽核](docs/A000_CONNECTION_FLOW_AUDIT.md)
-- [Code Review 處理紀錄](docs/CODE_REVIEW_RESPONSE.md)
-- [YouTube Live 第三階段](docs/YOUTUBE_LIVE.md)
-- [測試計畫](docs/TEST_PLAN.md)
+The current GitHub release is [RE Lens v0.6.3](https://github.com/popuchoco/Unofficial-HTC-RE-Client/releases/tag/v0.6.3). Download the signed APK and its SHA-256 checksum from the release page. See the [release workflow](.github/workflows/android-release.yml) and [release process documentation (Traditional Chinese)](docs/RELEASE.md) for CI, signing, and publishing details.
 
-## 建置
+## Documentation
 
-需要 Android SDK 35 與 JDK 17。首次建置可直接使用專案內的 Gradle Wrapper：
+- [Documentation index and status](docs/README.md)
+- [Product specification](docs/SPECIFICATION.md)
+- [Software design](docs/SOFTWARE_DESIGN.md)
+- [Architecture decisions](docs/DECISIONS.md)
+- [Android compatibility](docs/ANDROID_COMPATIBILITY.md)
+- [Protocol notes](docs/PROTOCOL_NOTES.md)
+- [BLE and Wi-Fi Direct connection bootstrap](docs/CONNECTION_BOOTSTRAP.md)
+- [Connection guide](docs/CONNECTION_GUIDE.md)
+- [A000 connection-flow audit](docs/A000_CONNECTION_FLOW_AUDIT.md)
+- [Code review response](docs/CODE_REVIEW_RESPONSE.md)
+- [YouTube Live — phase 3](docs/YOUTUBE_LIVE.md)
+- [Test plan](docs/TEST_PLAN.md)
 
-```text
+## Build
+
+Install Android SDK 35 and JDK 17. Use the Gradle Wrapper included in the repository:
+
+```bash
 ./gradlew assembleDebug
 ```
 
-Windows PowerShell：
+On Windows PowerShell:
 
 ```powershell
 .\gradlew.bat assembleDebug
 ```
 
-APK 產出於 `app/build/outputs/apk/debug/`。
+The APK is generated under `app/build/outputs/apk/debug/`. For CI, APK releases, and Android signing-key setup, see the [release process documentation](docs/RELEASE.md).
 
-CI、發行 APK 與 Android 簽章金鑰設定，請參閱 [發行流程](docs/RELEASE.md)。
+## Third-Party Reference
 
-## 第三方功能參考
+The YouTube Live use case was informed by [JALsnipe/HTC-RE-YouTube-Live-Android](https://github.com/JALsnipe/HTC-RE-YouTube-Live-Android). That project does not provide a clearly identifiable license, so no code, assets, or native libraries were imported. The control surface was implemented independently using Google's current authorization and the YouTube Data API.
 
-YouTube Live 的使用情境參考 [JALsnipe/HTC-RE-YouTube-Live-Android](https://github.com/JALsnipe/HTC-RE-YouTube-Live-Android)。因該專案未提供可辨識的授權條款，本專案沒有匯入其程式碼、資源或原生函式庫，而是以 Google 現行授權與 YouTube Data API 獨立實作控制面。
+## Trademark Notice
 
-## 商標聲明
-
-HTC 與 HTC RE 為其各自權利人的商標。本專案為社群相容用戶端，不代表原廠授權、認可或支援。
+HTC and HTC RE are trademarks of their respective owners. This community compatibility client is not affiliated with, endorsed by, or supported by HTC.
