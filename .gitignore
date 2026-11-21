@@ -1,4 +1,5 @@
 .gradle/
+.signing/
 .idea/
 local.properties
 **/build/

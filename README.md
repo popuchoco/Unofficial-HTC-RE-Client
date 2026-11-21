@@ -73,13 +73,21 @@ Movies/RE Lens/
 
 ## 建置
 
-需要 Android SDK 35 與 JDK 17。在 `local.properties` 指定 Android SDK 後執行：
+需要 Android SDK 35 與 JDK 17。首次建置可直接使用專案內的 Gradle Wrapper：
 
 ```text
-gradle assembleDebug
+./gradlew assembleDebug
+```
+
+Windows PowerShell：
+
+```powershell
+.\gradlew.bat assembleDebug
 ```
 
 APK 產出於 `app/build/outputs/apk/debug/`。
+
+CI、發行 APK 與 Android 簽章金鑰設定，請參閱 [發行流程](docs/RELEASE.md)。
 
 ## 第三方功能參考
 
